@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.env*
+!.env.example
+.secrets/
+.worker/
+.test-pg/
+supabase/.temp/
+*.log
+.local-pg/
+*.tsbuildinfo
+output/
+.playwright-cli/
