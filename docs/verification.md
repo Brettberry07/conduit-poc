@@ -4,7 +4,7 @@
 
 The earlier Instinct → Cloudflare → local API/PostgreSQL → Mac worker → Instinct loop was observed working. This change prepares the same HTTP/queue contract for Vercel and Supabase and replaces hourly credentials with scoped, revocable 30-day keys.
 
-Cloud creation and deployment were approved on November 4, 2026. The project directory was renamed to `/Users/brettberry/Coding/Apps/conduit-poc`. Dedicated Supabase project `noftwqvntanjjgdchmmy` and Vercel project `prj_hJEeIrQwueIgVsyQcBkQDmg0ulDL` are deployed. Existing local POC data was preserved; it was not imported or replayed. The old local API, worker, database process and Cloudflare tunnel were stopped gracefully for the directory rename. The hosted worker is running separately.
+Cloud creation and deployment were approved on November 4, 2026. The project directory was renamed to `/Users/YOU/Coding/Apps/conduit-poc`. Dedicated Supabase project `<SUPABASE-PROJECT-REF>` and Vercel project `<VERCEL-PROJECT-ID>` are deployed. Existing local POC data was preserved; it was not imported or replayed. The old local API, worker, database process and Cloudflare tunnel were stopped gracefully for the directory rename. The hosted worker is running separately.
 
 The new Instinct-specific external acceptance gate remains pending: the hosted tests below were submitted from the Mac, not from Instinct.
 
@@ -38,7 +38,7 @@ The earlier host-default Node 26 is not the deployment target. The final Instinc
 
 ## Hosted evidence
 
-- API domain: **https://conduit-poc.vercel.app**.
+- API domain: **https://YOUR-PROJECT.vercel.app**.
 - Vercel deployment `dpl_F7yU2RiY6muXXQsf1g1ESGdprtpe`: **READY**, production POC domain, Node 24, region `iad1`. Source uploads were restricted to the 13 runtime/build files; no env files, keys, database files, worker state, logs, tests or administrator scripts were uploaded.
 - Supabase PostgreSQL **17.11.0.011**, region `us-east-1`. Runtime connected to the transaction pooler with verified TLS using the official Supabase CA from the project's SSL-settings certificate link.
 - Anonymous `GET /api/jobs`: application JSON **401**, rather than an upstream login page.
@@ -49,7 +49,7 @@ The earlier host-default Node 26 is not the deployment target. The final Instinc
 - Supabase security advisor reported only **INFO: RLS enabled with no policies** for private `conduit_meta.schema_migrations`. This is intentional owner-only/default-deny metadata; ordinary roles and the runtime are denied. No permissive policy was added to suppress the informational notice. [Advisor explanation](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy).
 - Vercel's runtime-log API returned **403** for the connection; log-level post-deployment auditing could not be completed through that connector. This is an observability limitation, not a functional-test failure. No claim of a clean Vercel runtime-error scan is made.
 
-The normal `mac-worker` is running against the hosted stable domain with `.secrets/worker-hosted.json` and `.worker/hosted-mac-worker`. Instinct must securely replace its old hourly secret with the token from `.secrets/instinct-hosted.json`, then repeat POST/GET against the Vercel domain before the new external loop can be marked fully accepted.
+The normal `mac-worker` is running against the hosted stable domain with `.secrets/worker-hosted.json` and `.worker/hosted-mac-worker`. Instinct must securely replace its old hourly secret with the token from `.secrets/<submitter-key>.json`, then repeat POST/GET against the Vercel domain before the new external loop can be marked fully accepted.
 
 ## Health and authentication endpoint update
 
