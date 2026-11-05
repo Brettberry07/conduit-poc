@@ -1,0 +1,54 @@
+import { createHash, randomBytes } from "node:crypto";
+import type { DB } from "./db";
+export const SCOPES = [
+  "jobs:create",
+  "jobs:read",
+  "jobs:claim",
+  "jobs:update",
+] as const;
+export type Scope = (typeof SCOPES)[number];
+export const credentialScopes = {
+  instinct: ["jobs:create", "jobs:read"],
+  worker: ["jobs:claim", "jobs:update"],
+} as const;
+export const hashKey = (key: string) =>
+  createHash("sha256").update(key).digest("hex");
+export function generateKey() {
+  const token = `cnd_live_${randomBytes(32).toString("base64url")}`;
+  return { token, hash: hashKey(token), prefix: token.slice(0, 17) };
+}
+export type Identity = {
+  principal: string;
+  scopes: Scope[];
+  role: "submitter" | "worker";
+  id: string;
+};
+export async function authenticate(
+  db: DB,
+  authorization: string,
+): Promise<Identity | null> {
+  if (!/^Bearer cnd_live_[A-Za-z0-9_-]{43}$/.test(authorization)) return null;
+  const {
+    rows: [key],
+  } = await db.query("SELECT * FROM orchestrator.authenticate_api_key($1)", [
+    hashKey(authorization.slice(7)),
+  ]);
+  return key ?? null;
+}
+export function requiredScope(path: string, method: string): Scope | null {
+  if (method === "POST" && path === "/api/jobs") return "jobs:create";
+  if (
+    method === "GET" &&
+    (path === "/api/jobs" ||
+      path === "/api/workers" ||
+      /^\/api\/jobs\/[^/]+$/.test(path))
+  )
+    return "jobs:read";
+  if (method === "POST" && path === "/api/claim") return "jobs:claim";
+  if (
+    method === "POST" &&
+    (path === "/api/heartbeat" || /^\/api\/jobs\/[^/]+\/report$/.test(path))
+  )
+    return "jobs:update";
+  return null;
+}

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { authenticate, requiredScope } from "./keys";
 import { z } from "zod";
 import type { DB } from "./db";
 import { claim, report, publicColumns } from "./queue";
@@ -27,8 +27,6 @@ const reportBody = z
     if (v.action === "completed" && !v.result)
       c.addIssue({ code: "custom", message: "Completion requires result" });
   });
-export const hashKey = (key: string) =>
-  createHash("sha256").update(key).digest("hex");
 const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 async function body(req: Request) {
@@ -57,24 +55,13 @@ async function body(req: Request) {
 export async function handle(req: Request, db: DB): Promise<Response> {
   try {
     const authorization = req.headers.get("authorization") ?? "";
-    if (!/^Bearer [A-Za-z0-9_-]{40,128}$/.test(authorization))
-      return json({ error: "Unauthorized" }, 401);
-    const {
-      rows: [key],
-    } = await db.query(
-      `SELECT principal,role FROM orchestrator.api_keys
-    WHERE key_hash=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()`,
-      [hashKey(authorization.slice(7))],
-    );
+    const key = await authenticate(db, authorization);
     if (!key) return json({ error: "Unauthorized" }, 401);
     const path = new URL(req.url).pathname;
     const method = req.method;
-    const isWorker =
-      path === "/api/claim" ||
-      path === "/api/heartbeat" ||
-      /^\/api\/jobs\/[^/]+\/report$/.test(path);
-    if (key.role !== (isWorker ? "worker" : "submitter"))
-      return json({ error: "Forbidden" }, 403);
+    const scope = requiredScope(path, method);
+    if (!scope) return json({ error: "Not found" }, 404);
+    if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
     if (method === "POST" && path === "/api/jobs") {
       const input = createJob.parse(await body(req));
       const requestId = uuid.parse(req.headers.get("idempotency-key"));

@@ -1,29 +1,26 @@
 import { readFile, mkdir, open, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { ApiError, cycle, log } from "./runner";
-const base = new URL(process.env.ORCHESTRATOR_URL ?? "http://127.0.0.1:3000");
-if (
-  base.username ||
-  base.password ||
-  base.search ||
-  base.hash ||
-  base.pathname !== "/"
-)
-  throw Error("Use a plain API origin");
-if (
-  base.protocol !== "https:" &&
-  !(
-    base.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname)
-  )
-)
-  throw Error("HTTPS required except loopback");
+import { apiOrigin, workerClient } from "./client";
+const base = apiOrigin(
+  process.env.CONDUIT_API_URL ??
+    process.env.ORCHESTRATOR_URL ??
+    "http://127.0.0.1:3000",
+);
 if (!process.env.WORKER_KEY_FILE)
   throw Error("Set WORKER_KEY_FILE to the worker credential JSON path");
-const credential = JSON.parse(
-  await readFile(process.env.WORKER_KEY_FILE, "utf8"),
-);
-if (credential.role !== "worker") throw Error("Worker credential required");
+let credential: { token: string; role: string; principal: string };
+try {
+  credential = JSON.parse(await readFile(process.env.WORKER_KEY_FILE, "utf8"));
+} catch {
+  throw Error("Unable to read worker credential JSON file");
+}
+if (
+  credential.role !== "worker" ||
+  !/^cnd_live_[A-Za-z0-9_-]{43}$/.test(credential.token) ||
+  !/^[A-Za-z0-9_-]{1,80}$/.test(credential.principal)
+)
+  throw Error("A valid worker credential file is required");
 const dir = resolve(
   process.env.WORKER_STATE_DIR ?? join(".worker", credential.principal),
 );
@@ -44,23 +41,27 @@ process.on("SIGTERM", () => {
   stop = true;
 });
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const call = async (path: string, body?: unknown) => {
-  const response = await fetch(new URL(path, base), {
-    method: "POST",
-    redirect: "error",
-    signal: AbortSignal.timeout(5000),
-    headers: {
-      Authorization: `Bearer ${credential.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body ?? {}),
-  });
-  if (!response.ok) throw new ApiError(response.status);
-  return response.json();
-};
+const call = workerClient(base, credential.token);
 log("started", { worker_id: credential.principal });
 let backoff = 1000;
 try {
+  // Bind persistent recovery state to its API origin; never send old claim tokens to another host.
+  const binding = join(dir, "origin");
+  try {
+    await open(binding, "wx", 0o600).then(async (file) => {
+      try {
+        await file.writeFile(base.origin);
+      } finally {
+        await file.close();
+      }
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if ((await readFile(binding, "utf8")) !== base.origin)
+      throw Error(
+        "Worker state belongs to another API origin. Use a separate WORKER_STATE_DIR.",
+      );
+  }
   while (!stop) {
     try {
       await cycle(call, dir, wait, () => stop);

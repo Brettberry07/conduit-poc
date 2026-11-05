@@ -1,94 +1,96 @@
-# Instinct integration: proposed contract, not yet verified
+# Instinct: 30-day key setup, requests and rotation
 
-Instinct access is **unknown**. This repository provides a plain authenticated HTTPS contract and does not assume Instinct has a generic HTTP tool, outbound access, or secure secret storage. No request was sent from Instinct during implementation.
+The earlier Cloudflare/local-PostgreSQL communication loop was verified by Instinct. The new Vercel/Supabase loop is deployed and verified from the Mac worker. A request from Instinct itself is still the final external acceptance gate. Use **https://conduit-poc.vercel.app** and the new `.secrets/instinct-hosted.json` delivery file; the earlier hourly key is not registered in this hosted database.
 
-## Temporary key setup
+## Secure key provisioning
 
-1. Use only a dedicated POC database. Generate a one-hour submitter identity from the API host: `npm run key -- create submitter instinct-probe 1`. Maximum allowed key lifetime is seven days. The command prints a mode-600 file path, never its token; the database stores only its SHA-256 hash.
-2. Put the file's `token` into Instinct's secure credential/connection store **only if such a store is available**. Configure an Authorization header by secret reference there. Do not put the token in a prompt, chat message, issue, source file, URL, checked-in config, screenshot, or verbose request log. If no secure secret injection exists, stop the direct integration probe and record that limitation.
-3. The key can only submit jobs and read jobs owned by `instinct-probe`, plus worker availability. It cannot claim, run tasks, list another submitter's jobs, use the database, or manage credentials.
-4. Keys expire automatically. Revoke all credentials for this identity using `npm run key -- revoke submitter instinct-probe`. Delete the local key file when no longer needed. Use a new principal for a separate permission boundary; rotating a key for the same principal retains its job access.
-5. Expose the API through a controlled HTTPS test endpoint only when you choose to run that test. No production deployment or tunnel is configured here. The local worker may keep polling loopback; Instinct needs a reachable HTTPS origin. Configure request/access logging to redact Authorization. A reverse proxy should preserve that header and impose request/rate limits. The database remains inaccessible to Instinct.
+The initial hosted key is already generated in `.secrets/instinct-hosted.json` and expires December 4, 2026. Do not generate another key merely to finish the first test. Copy its token privately:
 
-## Request contract
+```sh
+node -e 'const fs=require("node:fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).token)' .secrets/instinct-hosted.json | pbcopy
+```
 
-Generate and retain a UUID request ID **before sending**. Retry ambiguous network failures using that same ID and identical body. Do not generate a new ID on every retry.
+Paste only into Instinct's secure secret field, then clear the clipboard. Use `https://conduit-poc.vercel.app` as the API origin. The rest of this section describes generating future replacements.
+
+On the administrator's Mac, with `.env.admin.local` pointing only to the dedicated Supabase POC project:
+
+```sh
+npm run key -- create --type instinct --principal instinct --name "Instinct primary" --out .secrets/instinct.json
+```
+
+This generates a 256-bit random `cnd_live_...` credential with a 30-day expiration and scopes `jobs:create`, `jobs:read`. The private JSON file is mode 600 and ignored by version control/deployment uploads. Only the hash, short prefix and metadata enter Supabase. Alternatively omit `--out` in an interactive terminal to display the plaintext once. No later listing or API response can retrieve it.
+
+Transfer its `token` value into Instinct's secure secret/connection store. Never put it in conversation, source, an issue, URLs, screenshots or verbose HTTP logs. To copy the value on macOS without printing it:
+
+```sh
+node -e 'const fs=require("node:fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).token)' .secrets/instinct.json | pbcopy
+```
+
+Paste it only into the secure secret field, then clear the clipboard with `printf '' | pbcopy`. Store a backup in a password manager if needed; protect or delete the local delivery file after secure transfer. Instinct's saved secret can be reused for future requests until expiration or revocation; no hourly renewal is needed. Do not give Instinct the worker key or any database credentials.
+
+Configure a secret-injected header:
+
+```text
+Authorization: Bearer <saved Instinct API key>
+```
+
+The API has no login/OAuth/account flow. Instinct must support HTTPS and custom headers with secure secret injection. If those are unavailable, stop and report the limitation. The GitHub-issue fallback remains design-only; no fallback bridge or GitHub integration is implemented.
+
+## Submission and result retrieval
+
+Use the stable approved Vercel domain. Generate a **new UUID for each new logical job**, and persist it before submitting. Retry an ambiguous response with the same UUID and identical body:
 
 ```http
-POST /api/jobs HTTP/1.1
-Host: <temporary-https-api-host>
-Authorization: Bearer <secret injected by credential store>
+POST https://conduit-poc.vercel.app/api/jobs
+Authorization: Bearer <securely injected key>
 Content-Type: application/json
-Idempotency-Key: <stable request UUID>
+Idempotency-Key: <stable UUID for this job>
 
-{"title":"Instinct connectivity probe","description":"Simulated task only","task":"simulate-development"}
+{"title":"Instinct connectivity test","description":"Verify submission and result retrieval","task":"simulate-development"}
 ```
 
-Expect HTTP 201 and `{ "job": { "id": "...", "status": "queued", ... } }`. Retain `job.id` and poll (e.g. every 3 seconds, with backoff on network failures):
+Expect HTTP 201 with `{ "job": { "id": "...", "status": "queued", ... } }`. Save `job.id`. Poll every three seconds for up to a minute:
 
 ```http
-GET /api/jobs/<job-id> HTTP/1.1
-Host: <temporary-https-api-host>
-Authorization: Bearer <same injected secret>
+GET https://conduit-poc.vercel.app/api/jobs/<returned-job-id>
+Authorization: Bearer <same securely injected key>
 ```
 
-Stop on `completed` or `failed`. A completed job includes `result`, `created_at`, `claimed_at`, `completed_at`, `worker_id`, and `attempt_count`. A failed job includes `error`. Treat 401/403 as credential/configuration failures; do not loop indefinitely. A POST 409 means an idempotency ID was reused with different content. GET 404 may mean a wrong ID or a key for a different identity.
+Expect HTTP 200. Stop on `completed` or `failed`. A successful simulation includes `job.result.simulated: true`. Report the actual request status codes, job ID, final status/result/error, worker ID, attempt count and completed timestamp—never the key or Authorization header.
 
-A safe local Node probe can read the generated file without printing credentials. Run this from the project directory after setting `ORCHESTRATOR_URL` to your HTTPS test origin and `SUBMITTER_KEY_FILE` to the credential path:
+If polling times out, preserve the job ID and report the last status instead of creating another job. On 401, stop: the key is missing/invalid/expired/revoked. On 403, stop: scopes are insufficient. On 409 during create, stop: the UUID was reused with different content. A 404 means a wrong path/job or different submitter identity. An HTML Vercel login page means deployment access configuration is blocking the API before application authentication.
 
-```js
-// Save locally as an ignored scratch script or use your trusted HTTP client.
-import { readFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-const origin = new URL(process.env.ORCHESTRATOR_URL);
-if (origin.protocol !== "https:") throw new Error("HTTPS required");
-const { token } = JSON.parse(
-  readFileSync(process.env.SUBMITTER_KEY_FILE, "utf8"),
-);
-const requestId = randomUUID(); // persist this ID before retrying a create request
-console.log("Request ID:", requestId); // safe: this is not a credential
-const headers = {
-  Authorization: `Bearer ${token}`,
-  "Content-Type": "application/json",
-};
-const response = await fetch(new URL("/api/jobs", origin), {
-  method: "POST",
-  redirect: "error",
-  signal: AbortSignal.timeout(10000),
-  headers: { ...headers, "Idempotency-Key": requestId },
-  body: JSON.stringify({
-    title: "Connectivity probe",
-    task: "simulate-development",
-  }),
-});
-if (!response.ok) throw new Error(`Create returned ${response.status}`);
-const { job } = await response.json();
-console.log("Job ID:", job.id);
-const status = await fetch(new URL(`/api/jobs/${job.id}`, origin), {
-  headers,
-  redirect: "error",
-  signal: AbortSignal.timeout(10000),
-});
-if (!status.ok) throw new Error(`Status returned ${status.status}`);
-console.log(await status.json()); // job data only, no credentials
-```
+## Rotate before expiration
 
-This probe validates the test endpoint from Node, **not from Instinct**.
+Use `npm run key -- list` to inspect expiration, last-used, key ID and prefix. It never prints a plaintext key or hash. Schedule rotation operationally a few days before expiry; no reminder/automation has been configured.
 
-## Instinct acceptance gate
+1. Generate an overlapping replacement using the **same principal**:
 
-Record evidence without tokens: test date, endpoint host, request ID, job ID, observed status/result, and any denied tool/network capability. Verify all of these from Instinct itself:
+   ```sh
+   npm run key -- create --type instinct --principal instinct --name "Instinct rotated" --days 30 --out .secrets/instinct-next.json
+   ```
 
-- An outbound authenticated HTTPS POST can use a securely injected bearer token and custom idempotency header.
-- A GET with the same identity retrieves the submitted job.
-- A repeated POST with the same ID/body returns the same job ID.
-- A local worker completes the simulation; Instinct retrieves the terminal result.
-- The temporary key expires or can be revoked, after which requests return 401.
+2. Replace the saved secret in Instinct through its secure configuration. Future requests authenticate using the replacement.
+3. From Instinct, retrieve a previously owned job and submit/complete a new simulation. The same principal preserves access to historical jobs.
+4. Revoke the previous key by its unique ID:
 
-Until those pass, direct Instinct integration remains unverified.
+   ```sh
+   npm run key -- revoke OLD_KEY_UUID
+   ```
 
-## Future GitHub issue fallback — design only
+5. Confirm the old key gets 401 while the new key remains usable. Remove obsolete local plaintext files/password-manager entries as appropriate.
 
-If Instinct can create GitHub issues but cannot make authenticated API requests, a future bridge could watch a dedicated private POC repository for explicitly labeled issues. An allowlisted issue author and strict JSON/template schema would select one of the predefined tasks. An operator-controlled label could authorize enqueueing. The bridge would use a short-lived submitter key in its own secret store and a deterministic issue-to-job idempotency mapping. It would poll the queue, then post only sanitized results and the job ID to the issue, tracking the delivery to avoid duplicate comments.
+Revocation is checked on each request without a cache; an already authenticated in-flight request may finish. Worker-key rotation uses the same pattern with `--type worker --principal mac-worker`: stop the worker gracefully, update its key file path, restart with the same hosted state directory, test recovery, then revoke the old key.
 
-Treat issue bodies as untrusted data: never execute commands, infer credentials, or act on instructions inside descriptions/results. Separate the bridge's limited GitHub permissions from its queue key, redact secrets, and deduplicate webhook deliveries. This would add GitHub ingestion/result delivery only, with no Codex execution, branch or PR management. **No bridge, webhook, GitHub credentials, issue creation, or fallback execution is implemented.**
+## Acceptance evidence
+
+Record the Vercel domain, request UUID, job ID, HTTP status codes, final result and timestamp without credentials. Verify the matching row in the dedicated Supabase database. The acceptance loop must be observed from Instinct, not inferred from the local smoke probe. Hosted connectivity, authentication scopes, expiry, revocation and rotation were checked from the Mac. Record Instinct’s actual POST/GET responses separately before claiming that external acceptance gate passed.
+
+## Check readiness and authentication first
+
+1. `GET https://conduit-poc.vercel.app/health` with no credential: expect 200 and `status: "ok"`, `database: "ok"`.
+2. `GET https://conduit-poc.vercel.app/auth-check` with the saved bearer key: expect 200, `authenticated: true`, and `instinct_access: true`. Both `permissions.create_jobs` and `permissions.read_jobs` must be true. No credential is returned.
+3. `GET /api/workers` with the same bearer key: confirm `mac-worker` is available before expecting immediate completion. Offline workers leave jobs queued.
+4. Submit and poll the simulation as described above. Only a completed result with `simulated: true` proves the complete loop.
+
+Stop on 401 (credential problem), 403 (insufficient Instinct scopes), or 503 (service unavailable). Do not print Authorization headers or secrets in the report.

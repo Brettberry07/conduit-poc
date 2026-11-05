@@ -7,7 +7,9 @@ import { createServer } from "node:net";
 import { randomBytes, randomUUID } from "node:crypto";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
-import { handle, hashKey } from "../src/lib/api";
+import { health, authCheck } from "../src/lib/checks";
+import { handle } from "../src/lib/api";
+import { generateKey, hashKey } from "../src/lib/keys";
 import { ApiError, cycle, type Call } from "../worker/runner";
 
 async function freePort() {
@@ -21,7 +23,7 @@ test(
   "isolated PostgreSQL queue and worker integration",
   { timeout: 120000 },
   async (t) => {
-    const dir = await mkdtemp(join(tmpdir(), "orchestrator-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "conduit-test-"));
     const port = await freePort();
     const password = randomBytes(24).toString("hex");
     const postgres = new EmbeddedPostgres({
@@ -35,7 +37,14 @@ test(
       onLog: () => {},
       onError: () => {},
     });
+    const connections = new Set<pg.PoolClient>();
+    const track = (pool: pg.Pool) =>
+      pool.on("connect", (client) => {
+        connections.add(client);
+        client.once("end", () => connections.delete(client));
+      });
     let db: pg.Pool | undefined;
+    let runtime: pg.Pool | undefined;
     try {
       await postgres.initialise();
       await postgres.start();
@@ -51,24 +60,54 @@ test(
         await db.query(
           await readFile(join("supabase/migrations", file), "utf8"),
         );
+      track(db);
       const pool = db;
+      await pool.query(
+        "CREATE ROLE conduit_test_runtime LOGIN PASSWORD 'test-only-password' INHERIT",
+      );
+      await pool.query("GRANT conduit_api TO conduit_test_runtime");
+      runtime = new pg.Pool({
+        host: "127.0.0.1",
+        port,
+        user: "conduit_test_runtime",
+        password: "test-only-password",
+        database: "postgres",
+        max: 12,
+      });
+      track(runtime);
+      const runtimeDb = runtime;
       const tokens = {
-        submitter: randomBytes(32).toString("base64url"),
-        other: randomBytes(32).toString("base64url"),
-        worker: randomBytes(32).toString("base64url"),
-        worker2: randomBytes(32).toString("base64url"),
-        expired: randomBytes(32).toString("base64url"),
-        revoked: randomBytes(32).toString("base64url"),
+        submitter: generateKey().token,
+        other: generateKey().token,
+        worker: generateKey().token,
+        worker2: generateKey().token,
+        expired: generateKey().token,
+        revoked: generateKey().token,
+        readOnly: generateKey().token,
+        claimOnly: generateKey().token,
+        updateOnly: generateKey().token,
       };
       for (const [name, token] of Object.entries(tokens))
         await pool.query(
-          `INSERT INTO orchestrator.api_keys(key_hash,principal,role,expires_at,revoked_at) VALUES($1,$2,$3,clock_timestamp()+$4::interval,$5)`,
+          `INSERT INTO orchestrator.api_keys(key_hash,principal,role,expires_at,revoked_at,name,key_prefix,scopes) VALUES($1,$2,$3,clock_timestamp()+$4::interval,$5,$2,$6,$7)`,
           [
             hashKey(token),
             name,
-            name.startsWith("worker") ? "worker" : "submitter",
+            ["worker", "worker2", "claimOnly", "updateOnly"].includes(name)
+              ? "worker"
+              : "submitter",
             name === "expired" ? "-1 hour" : "1 hour",
             name === "revoked" ? new Date() : null,
+            token.slice(0, 17),
+            name === "readOnly"
+              ? ["jobs:read"]
+              : name === "claimOnly"
+                ? ["jobs:claim"]
+                : name === "updateOnly"
+                  ? ["jobs:update"]
+                  : name.startsWith("worker")
+                    ? ["jobs:claim", "jobs:update"]
+                    : ["jobs:create", "jobs:read"],
           ],
         );
       async function req(
@@ -90,7 +129,7 @@ test(
             },
             ...(body ? { body: JSON.stringify(body) } : {}),
           }),
-          pool,
+          runtimeDb,
         );
       }
       async function create(task = "simulate-development") {
@@ -119,11 +158,171 @@ test(
             assert.equal((await req("/jobs", role)).status, 401);
           const invalid = await handle(
             new Request("http://localhost/api/jobs", {
-              headers: { Authorization: `Bearer ${"a".repeat(43)}` },
+              headers: { Authorization: `Bearer cnd_live_${"a".repeat(43)}` },
             }),
-            pool,
+            runtimeDb,
           );
           assert.equal(invalid.status, 401);
+        },
+      );
+      await t.test(
+        "health checks queue readiness without authentication or job data",
+        async () => {
+          const response = await health(() => runtimeDb);
+          assert.equal(response.status, 200);
+          assert.deepEqual(await response.json(), {
+            status: "ok",
+            service: "Conduit POC",
+            database: "ok",
+          });
+          assert.equal(response.headers.get("cache-control"), "no-store");
+        },
+      );
+      await t.test(
+        "auth-check validates credentials and requires both Instinct scopes",
+        async () => {
+          for (const name of [
+            "submitter",
+            "worker",
+            "readOnly",
+            "expired",
+            "revoked",
+            "none",
+          ] as const) {
+            const response = await authCheck(
+              new Request("http://localhost/auth-check", {
+                headers:
+                  name === "none"
+                    ? {}
+                    : { Authorization: `Bearer ${tokens[name]}` },
+              }),
+              () => runtimeDb,
+            );
+            assert.equal(
+              response.status,
+              name === "submitter"
+                ? 200
+                : ["worker", "readOnly"].includes(name)
+                  ? 403
+                  : 401,
+            );
+            const body = await response.json();
+            assert.equal(body.instinct_access, name === "submitter");
+            assert.equal(
+              body.authenticated,
+              ["submitter", "worker", "readOnly"].includes(name),
+            );
+            assert.ok(
+              !JSON.stringify(body).includes(
+                name === "none" ? "cnd_live_" : tokens[name],
+              ),
+            );
+          }
+          const invalid = await authCheck(
+            new Request("http://localhost/auth-check", {
+              headers: { Authorization: "Bearer " + generateKey().token },
+            }),
+            () => runtimeDb,
+          );
+          assert.equal(invalid.status, 401);
+        },
+      );
+      await t.test(
+        "scopes are enforced per operation and valid keys update last-used",
+        async () => {
+          assert.equal((await req("/jobs", "readOnly")).status, 200);
+          assert.equal(
+            (await req("/jobs", "readOnly", "POST", { title: "Denied" }))
+              .status,
+            403,
+          );
+          assert.equal((await req("/claim", "claimOnly", "POST")).status, 200);
+          assert.equal(
+            (await req("/heartbeat", "claimOnly", "POST")).status,
+            403,
+          );
+          assert.equal((await req("/claim", "updateOnly", "POST")).status, 403);
+          assert.equal(
+            (await req("/heartbeat", "updateOnly", "POST")).status,
+            200,
+          );
+          const {
+            rows: [key],
+          } = await pool.query(
+            "SELECT last_used_at FROM orchestrator.api_keys WHERE key_hash=$1",
+            [hashKey(tokens.readOnly)],
+          );
+          assert.ok(key.last_used_at);
+          const {
+            rows: [unused],
+          } = await pool.query(
+            "SELECT last_used_at FROM orchestrator.api_keys WHERE key_hash=$1",
+            [hashKey(tokens.expired)],
+          );
+          assert.equal(unused.last_used_at, null);
+        },
+      );
+      await t.test(
+        "runtime validates keys but cannot read or manage them",
+        async () => {
+          for (const sql of [
+            "SELECT * FROM orchestrator.api_keys",
+            "UPDATE orchestrator.api_keys SET revoked_at=NULL",
+            "INSERT INTO orchestrator.api_keys(key_hash) VALUES('x')",
+            "DELETE FROM orchestrator.api_keys",
+          ])
+            await assert.rejects(runtimeDb.query(sql), /permission denied/);
+          await pool.query("CREATE ROLE anon NOLOGIN");
+          await pool.query("CREATE ROLE authenticated NOLOGIN");
+          for (const role of ["anon", "authenticated"]) {
+            const c = await pool.connect();
+            try {
+              await c.query(`SET ROLE ${role}`);
+              await assert.rejects(
+                c.query("SELECT * FROM orchestrator.api_keys"),
+                /permission denied/,
+              );
+              await assert.rejects(
+                c.query("SELECT * FROM orchestrator.authenticate_api_key($1)", [
+                  hashKey(tokens.submitter),
+                ]),
+                /permission denied/,
+              );
+            } finally {
+              await c.query("RESET ROLE");
+              c.release();
+            }
+          }
+        },
+      );
+      await t.test(
+        "key administrator can manage credentials but cannot read jobs or validate hashes",
+        async () => {
+          const connection = await pool.connect();
+          try {
+            await connection.query("SET ROLE conduit_key_admin");
+            assert.ok(
+              (
+                await connection.query(
+                  "SELECT id,name,key_prefix FROM orchestrator.api_keys",
+                )
+              ).rowCount,
+            );
+            await assert.rejects(
+              connection.query("SELECT * FROM orchestrator.jobs"),
+              /permission denied/,
+            );
+            await assert.rejects(
+              connection.query(
+                "SELECT * FROM orchestrator.authenticate_api_key($1)",
+                [hashKey(tokens.submitter)],
+              ),
+              /permission denied/,
+            );
+          } finally {
+            await connection.query("RESET ROLE");
+            connection.release();
+          }
         },
       );
       await t.test("separate permissions and owner isolation", async () => {
@@ -457,7 +656,13 @@ test(
         },
       );
     } finally {
+      // pg.Pool.end resolves before every socket has emitted end; let clients close before stopping PostgreSQL.
+      const closed = [...connections].map(
+        (client) => new Promise<void>((done) => client.once("end", done)),
+      );
+      await runtime?.end();
       await db?.end();
+      await Promise.all(closed);
       await postgres.stop().catch(() => {});
       await rm(dir, { recursive: true, force: true });
     }

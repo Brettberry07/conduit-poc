@@ -1,15 +1,32 @@
-# Manual end-to-end acceptance test
+# Acceptance tests
 
-1. Follow the README's isolated database setup. Start Next.js without the worker. Generate a submitter key and connect the dashboard. It should show no workers. Submit a development job; it stays queued with attempt count zero.
-2. Start the worker using a separate worker key. The dashboard should show it available/busy, and the job should progress then complete. Open Details: result has `simulated: true`, timestamps are populated, attempt count is 1, and lease expiration is cleared.
-3. Submit `simulate-failure`. It should enter Failed with `Predefined simulated failure` and a completion timestamp.
-4. Generate a second worker identity (`npm run key -- create worker mac-worker-2 1`) and run it in a separate terminal. Queue several jobs. Each job has one winning claim per attempt, and no duplicate completion. Run `npm test` for deterministic concurrent claim and row-lock checks.
-5. Queue a task and interrupt the first worker with Ctrl-C during progress. Restart immediately with the same key and state directory. It should renew the saved claim and complete safely. It may repeat simulated steps; no shell or external effect occurs.
-6. Repeat with an abrupt process termination. Verify the recorded lock PID is no longer alive, then remove only that worker's `lock` file. Keep `journal.json`. Wait more than 30 seconds before restarting, or let the second worker reclaim. The original worker logs `lease_lost`; the new attempt can finish and the old attempt cannot overwrite it. Three consecutive abandoned leases become failed on the next claim poll. The automated suite performs this without real waits.
-7. Stop Next.js while a worker is active. It should log retry events, stop advancing work, and back off to at most 10 seconds. Restart Next.js; it should renew/retry a still-valid claim or discard an expired one. A persisted completed outcome can be acknowledged again without rerunning steps.
-8. Stop the worker and wait 15 seconds. The dashboard shows Offline. Its running job remains running until a worker polls after lease expiry; the lease timestamp makes abandonment visible.
-9. Disconnect the dashboard. Try a worker key in the dashboard: data requests return 403. Missing/random/expired/revoked keys return 401. Another submitter identity sees none of the first submitter's jobs and gets 404 for its IDs. Never paste credentials into screenshots or chat.
-10. Revoke a test identity using `npm run key -- revoke worker mac-worker`. The worker exits on its next 401, preserving recovery state; the dashboard still works. Reissue a key for the same identity to resume. Revoke submitter keys separately with `npm run key -- revoke submitter dashboard`.
-11. Run the Instinct capability probe in `instinct.md`. Do not mark the external integration verified until Instinct itself can submit, retrieve and observe a completed simulated job using HTTPS. Local curl/Node success is insufficient evidence of Instinct access.
+Hosted API/worker connectivity, authentication and network-recovery checks passed on November 4, 2026. See `verification.md` for job IDs and scope. Instinct must still run the new external POST/GET acceptance test using its new key.
 
-Keep any API testing client's Authorization field secret; disable verbose HTTP logging and avoid saving request headers. Cleanup: stop worker and web processes, stop the local database, revoke temporary keys while the database is running if you want to preserve the database. All test state is project-local. No hosted resource should be changed by this procedure.
+## Local automated gate
+
+Use Node 24.x. Run `npm ci`, `npm test`, `npm run build`, and `npm run typecheck` before approving hosted changes. Tests use disposable PostgreSQL databases and restricted runtime connections. They verify original-schema upgrade preserves a job, revokes legacy keys, and records repeatable migration history; key authenticity/expiration/revocation/scopes/last-used; public-role denial; administrator CLI generation/list/revocation; concurrent claiming, row-lock skipping, worker ownership, terminal idempotency, lease expiry and three-attempt exhaustion; journal recovery after network failure and a lost completion response; and a real Next.js HTTP request processed by a separately spawned worker.
+
+## Hosted acceptance
+
+1. Confirm the Vercel stable domain returns the Conduit JSON service identifier at `/`. There must be no dashboard. Anonymous `GET /api/jobs` returns JSON 401.
+2. Start the Mac worker using the hosted API URL, private worker file and a new hosted state directory. No database variables should be needed by this process.
+3. Run `npm run smoke` with `CONDUIT_API_URL` and `SUBMITTER_KEY_FILE`. It should return completed / simulated true and the same job ID for repeated idempotent submissions. Inspect that row in the dedicated Supabase project: status, result, worker, attempt count and timestamps must match.
+4. From Instinct, run the POST/GET procedure in `instinct.md`. Capture actual status codes and result without credentials. This is the external acceptance gate.
+5. Submit `simulate-failure` under another request UUID. Expect `failed`, `Predefined simulated failure`, and a completion timestamp.
+6. Temporarily interrupt the worker's network access during progress, leaving Vercel/Supabase running. Logs should show retries without credential/claim-token content. Restore access promptly: it should renew the valid claim and finish. Leave it disconnected for over 30 seconds and restore: it should reject the expired saved claim, reacquire eligible work with a new token and attempt count, and finish. No external side effects should occur.
+7. Ctrl-C during a simulation, then restart with the same URL, worker principal and state directory. It should resume safely. To test a crash, terminate the worker abruptly, verify its recorded PID is gone and remove only its lock file; preserve journal and origin. Restart before/after lease expiry. Never remove a live process's lock.
+8. For concurrent-claim behavior, create a second worker key with a **different principal** and separate state directory. Queue several simulations. Each unexpired claim has one owner. Use automated PostgreSQL tests for the deterministic locked-row/stale-token cases; do not send raw claim tokens through chat.
+9. Use a worker credential on `POST /api/jobs` or `GET /api/jobs`: expect 403. Another Instinct principal must get an empty own-job list and 404 for the first principal's job ID. Missing/random/expired/revoked keys get 401.
+10. Rotate Instinct's key with the same principal. The new key must retrieve prior results. Revoke the old key ID and verify its next request gets 401, while the new key remains valid. Listing must show prefix/metadata only, not plaintext/hashes.
+11. Rotate the worker key with the same principal, preserving hosted state. Revoke the old worker key after validating the replacement. A worker using the revoked key stops on 401.
+12. Confirm the runtime database login cannot SELECT/INSERT/UPDATE/DELETE API keys, access migration history, create roles or databases, or bypass RLS. Ordinary Supabase `anon` and `authenticated` roles cannot access the private schemas or authentication function. Run Supabase security advisors and review any findings in the new project only.
+13. Inspect Vercel/runtime logs and worker logs without exporting sensitive request headers. Confirm no bearer key, claim token, admin URL, or database password appears. Stop the old tunnel/local API/database only after hosted acceptance passes; preserve old data for rollback evidence.
+
+## Interpreting failures
+
+- JSON 401: missing, malformed, expired, revoked, or unregistered key. Confirm the key and API use the same dedicated database.
+- JSON 403: valid key lacks the required scope. Instinct and worker keys are intentionally different.
+- JSON 409 on worker reports: lease expired, token stale, or worker mismatch; journal recovery should handle it.
+- Vercel HTML/redirect instead of JSON: deployment access/protection is intercepting requests.
+- JSON 500: check sanitized Vercel function logs, runtime DB permissions, pooler custom-role username, verified TLS/CA, and migrations. Do not print connection strings or request headers.
+- Worker marked offline after 15 seconds: heartbeat is stale. A running job becomes reclaimable after 30 seconds, and the next polling worker performs cleanup/reclaim.

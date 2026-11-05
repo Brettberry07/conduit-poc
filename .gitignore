@@ -11,3 +11,11 @@ supabase/.temp/
 *.tsbuildinfo
 output/
 .playwright-cli/
+
+.vercel/
+!.env.admin.example
+!.env.worker.example
+.local-pg-conduit/
+.next-test*/
+.tsconfig-test-*.json
+!.env.schema-admin.example

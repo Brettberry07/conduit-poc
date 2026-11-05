@@ -1,137 +1,153 @@
-# Orchestrator POC
+# Conduit POC
 
-A standalone Next.js / TypeScript API and dashboard, Supabase PostgreSQL queue, and macOS Node.js worker. The worker runs **only two predefined simulations**. There is no Codex, GitHub execution, PR management, simulator automation, or production deployment.
+A small authenticated job API, Supabase PostgreSQL queue, and local Mac TypeScript worker. The existing Next.js API, JSON responses, simulations, row-lock claiming, lease fencing and worker recovery are preserved. The hosted path is:
 
-## Run locally
+```text
+Instinct ──HTTPS──> Vercel Next.js API ──verified TLS──> Supabase PostgreSQL
+Mac worker ──HTTPS──> Vercel Next.js API
+```
 
-Requires Node.js 22+ and npm. From this directory:
+No Cloudflare Tunnel or local PostgreSQL is needed once deployed. No dashboard, account system, OAuth, Codex, GitHub execution or simulator support is included. `/` returns a JSON service identifier. The local checkout and package are named `conduit-poc`. The private database schema retains its original `orchestrator` name to preserve the tested SQL and existing migration history.
+
+**Hosted deployment:** [https://conduit-poc.vercel.app](https://conduit-poc.vercel.app), backed by the dedicated [Supabase Conduit project](https://supabase.com/dashboard/project/noftwqvntanjjgdchmmy). Cloud setup and deployment were approved on November 4, 2026. The Mac worker communicates with Vercel; no tunnel or local PostgreSQL is required. Existing local job data remains preserved in `.local-pg/`; it was not replayed or imported into the hosted queue. See [deployment instructions](docs/deployment.md) and [verification evidence](docs/verification.md).
+
+The checked-out `.env.local` now contains only the restricted hosted runtime connection. `.env.admin.local` contains a separate **key-management-only** database login for the CLI. Neither is committed or uploaded. The full database administrator credential is not needed for normal key operations; future schema changes can use the Supabase connector or a separately configured `.env.schema-admin.local` via `CONDUIT_ADMIN_ENV_FILE`.
+
+## Quick local verification
+
+Use Node.js **24.x**, the Vercel runtime target, and npm:
 
 ```sh
 npm ci
+npm test
+npm run build
+npm run typecheck
 ```
 
-Choose **one** database setup:
+Tests provision disposable loopback PostgreSQL clusters, apply the actual migrations, exercise the real Next.js HTTP API and run a separate worker process. They do not load your real admin file, contact cloud databases, or change the earlier POC database. No Docker is required for these tests; do not run them as root. The embedded PostgreSQL binary is a development dependency only.
 
-**A. Local Supabase (intended stack).** Start Docker Desktop, then use the pinned CLI version used here (2.105.0):
+For interactive local development, `npm run db:local` starts a **separate** Conduit database on port 54433 in ignored `.local-pg-conduit/`, applies migrations, and writes `.env.admin.local`. It leaves the earlier port-54432 database and its data alone. It refuses to overwrite a different admin configuration. Keep that process open, then run once:
 
 ```sh
-supabase start
-supabase migration up --local
-cp .env.example .env.local
+npm run db:runtime
+```
+
+That provisions the restricted runtime database login and writes `.secrets/runtime-database.env`. Preserve any existing `.env.local` privately before replacing it with this new runtime configuration. Do not overwrite an existing hosted configuration accidentally.
+
+```sh
+# If .env.local exists, first copy it to a unique private backup in .secrets/.
+cp .secrets/runtime-database.env .env.local
 chmod 600 .env.local
-```
-
-The generated `supabase/config.toml` identifies this standalone local project as `orchestrator-poc`. The example URL uses its default local PostgreSQL port 54322. Do not link this project to StillOn or run unscoped hosted migration commands. The migration creates only the private `orchestrator` schema. Existing public tables are untouched. To shut down this local Supabase stack, use `supabase stop` from this directory.
-
-**B. Docker-free development fallback.** This starts a real, isolated PostgreSQL server on loopback port 54432, applies this project's migration, and writes a mode-600 `.env.local` without printing its random password:
-
-```sh
-npm run db:local
-```
-
-Keep it running in its own terminal. It refuses to overwrite a different `.env.local`; choose A or B before configuring the environment. Data persists in ignored `.local-pg/`. This fallback tests PostgreSQL queue semantics; it does not emulate Supabase Auth or the Data API, which this application does not use. Its PostgreSQL binary is supplied by the pinned `embedded-postgres` development dependency. macOS ARM64 was verified; run as an ordinary user, not root. Ctrl-C stops the database cleanly. Never start two copies.
-
-In another terminal, create separate temporary credentials:
-
-```sh
-npm run key -- create submitter dashboard 24
-npm run key -- create worker mac-worker 24
-```
-
-Each command prints a **file path**, never the token. Files live in ignored `.secrets/`, with mode 600; the database stores SHA-256 hashes only. Use the exact generated worker file path below:
-
-```sh
 npm run dev
 ```
 
-Open [the dashboard](http://127.0.0.1:3000). Enter the `token` value from your local submitter credential file. Keys stay in browser memory, not cookies or local storage; refresh requires reconnecting. To copy a key privately to the macOS clipboard without printing it, substitute its generated path:
+Generate local credentials using the same CLI below. In another terminal start the worker with `CONDUIT_API_URL=http://127.0.0.1:3000`. If the earlier web server occupies port 3000, stop it or pass `--port 3001` to `npm run dev -- --port 3001` and use that origin for the worker/probe. Ctrl-C stops the local database gracefully. Never delete the data directory or a live worker's lock to resolve a startup conflict.
+
+## Persistent API keys
+
+Key management runs **locally as a database administrator** using `.env.admin.local`. It does not run in Vercel or through an HTTP endpoint. See [.env.admin.example](.env.admin.example). A restricted runtime connection cannot read or administer the key table.
+
+Create a default 30-day Instinct key, delivering the plaintext once into a private local file:
 
 ```sh
-node -e 'const fs=require("node:fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).token)' .secrets/submitter-dashboard-TIMESTAMP.json | pbcopy
+npm run key -- create --type instinct --principal instinct --name "Instinct primary" --out .secrets/instinct.json
 ```
 
-Clear the clipboard after use. Then, in a third terminal:
+Create a separate worker key:
 
 ```sh
-WORKER_KEY_FILE=.secrets/worker-mac-worker-TIMESTAMP.json npm run worker
+npm run key -- create --type worker --principal mac-worker --name "MacBook worker" --out .secrets/worker.json
 ```
 
-Queue a job through the dashboard. It should move queued → running → completed in about 5 seconds. Select `Simulate failure` to exercise failure reporting. The API and dashboard are one Next.js process. Worker logs are JSON lines on stdout; save locally using `npm run worker >> .worker/execution.log 2>&1` if desired (the directory exists after first startup).
+To display a key **once in an interactive terminal instead**, omit `--out`. Do not capture that terminal in chat, screenshots, recordings or shared logs. Noninteractive creation requires `--out`; files use mode 600 and are never overwritten. The database stores only a SHA-256 hash of 256 random bits, plus an identification prefix. Full credentials start with `cnd_live_`. There is no API or CLI operation to retrieve their plaintext later.
 
-For an optimized **local** build, stop the dev server and use:
+Expiration defaults to 30 days; use `--days 60` (integer 1–3650) to customize it. Keys survive worker/API restarts and deployments, until expiration or explicit revocation. There is no hourly token refresh.
 
 ```sh
-npm run build
-npm run start
+npm run key -- list
+npm run key -- revoke KEY_UUID
 ```
 
-No deployment is performed. Both server commands bind to loopback by default.
+Listing returns metadata, scopes, prefix, expiration, revocation and last-used timestamps; it returns neither plaintext nor hashes. Revoke uses a unique key ID, so overlapping rotation can keep a replacement key valid. Principals identify job owners/workers independently of key IDs: rotate with the **same principal** to retain access and recovery ownership. A different principal creates a separate permission boundary.
 
-## Configuration
+| Credential type | Scopes                      |
+| --------------- | --------------------------- |
+| Instinct        | `jobs:create`, `jobs:read`  |
+| Local worker    | `jobs:claim`, `jobs:update` |
 
-| Variable            | Process           | Purpose                                                 |
-| ------------------- | ----------------- | ------------------------------------------------------- |
-| `DATABASE_URL`      | Next.js / key CLI | Secret PostgreSQL connection string, in `.env.local`    |
-| `DATABASE_SSL=true` | Next.js / key CLI | Enforce verified TLS for a hosted DB                    |
-| `DATABASE_CA_FILE`  | Next.js / key CLI | Optional CA certificate file for verified DB TLS        |
-| `ORCHESTRATOR_URL`  | Worker            | API origin, default `http://127.0.0.1:3000`             |
-| `WORKER_KEY_FILE`   | Worker            | Required path to generated worker credential JSON       |
-| `WORKER_STATE_DIR`  | Worker            | Default `.worker/<principal>`; preserve across restarts |
+Workers receive the task in the claim response and need no general `jobs:read` permission. Every protected request validates the hash, expiry, revocation and required scope using the database. Valid authentication updates `last_used_at`; there is no stale in-memory authorization cache. In-flight requests that already authenticated may finish during revocation; subsequent requests are denied.
 
-The worker accepts HTTP only for loopback; remote origins require HTTPS. It refuses redirects to avoid forwarding credentials. Use a separate worker principal and state directory for every worker instance. Do not copy a worker key to multiple machines or run parallel processes with that identity.
+See [Instinct setup and rotation](docs/instinct.md). Legacy unprefixed temporary keys are revoked by the new migration and rejected by the new API. Their metadata is retained; existing job rows and identities are preserved when upgrading a database in place.
 
-For a **new, dedicated** hosted Supabase project, manually put its direct or session-pooler PostgreSQL connection string in `.env.local`, enable verified TLS, and apply the SQL migration only to that project's database after checking the target. Supabase project creation and hosted migrations have intentionally not been run. This POC uses the server-side PostgreSQL connection rather than a Supabase service-role API key. No DB credentials or Supabase secrets use `NEXT_PUBLIC_*`. See [Supabase connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres) for connection options.
-
-## API and permissions
-
-Every `/api/*` operation requires `Authorization: Bearer <token>`. No browser Supabase access or public RLS policy is granted. The dashboard page shell is public, but all queue data requires authentication. Requests use Next.js [Route Handlers](https://nextjs.org/docs/app/getting-started/route-handlers).
-
-| Endpoint                                         | Role      | Behavior                                                           |
-| ------------------------------------------------ | --------- | ------------------------------------------------------------------ |
-| `POST /api/jobs`                                 | Submitter | Create a job; UUID `Idempotency-Key` header required               |
-| `GET /api/jobs?limit=100&before=<ISO timestamp>` | Submitter | Own jobs only; newest first, maximum 100                           |
-| `GET /api/jobs/:id`                              | Submitter | Own job status, result, error and timestamps                       |
-| `GET /api/workers`                               | Submitter | Worker ID, last seen, available and busy flags                     |
-| `POST /api/heartbeat`                            | Worker    | Record availability for this key's worker identity                 |
-| `POST /api/claim`                                | Worker    | Atomically claim one eligible job, or `{ "job": null }`            |
-| `POST /api/jobs/:id/report`                      | Worker    | Renew lease / report completion / report failure using claim token |
-
-Create body: `{ "title": "Test", "description": "Optional", "task": "simulate-development" }`. Supported task names: `simulate-development`, `simulate-failure`. Bodies reject unknown fields and are capped at 32 KiB; titles at 200 characters, descriptions and errors at 4,000. No task payload is interpreted as code or a shell command.
-
-Report body: `{ "claim_token": "<UUID>", "action": "progress", "progress": 40 }`. `completed` requires a JSON object `result`; `failed` requires an `error` string. All successful responses are JSON. Job responses are wrapped as `{ "job": ... }`; lists use `{ "jobs": [...] }`. Submitters never receive claim tokens. Errors: 400 invalid input, 401 invalid/expired/revoked key, 403 wrong role, 404 missing/unowned job, 409 lease lost or idempotency conflict, 500 internal error.
-
-A submitter can create and inspect its own jobs, not claim or execute them. A worker can claim from the shared queue and update only a current attempt assigned to its identity, not create or browse jobs. Submitters see worker availability across this single POC queue. Principals are identities; keys issued to the same role/principal intentionally share permissions and owned jobs.
-
-## Reliability model
-
-- The claim is one SQL statement with `FOR UPDATE SKIP LOCKED`, followed by an update under the same row lock. Different workers cannot acquire the same unexpired attempt.
-- A claim gets a random token and a 30-second lease. Every progress report extends the lease by 30 seconds. The server uses database time, not worker time.
-- Completion, failure, and progress updates require the worker ID, claim token, running status, and an unexpired lease. Old attempts are fenced after reclaim. Terminal acknowledgments with the same token/action are idempotent and preserve the first result.
-- A dead worker's lease becomes eligible for reclaim. After three abandoned attempts, the job becomes failed on the next claim poll. There is no separate sweeper; without polling, expired rows remain visibly running until another worker polls. The dashboard displays lease timestamps to expose this state.
-- Worker availability means a heartbeat was seen in the last 15 seconds; `busy` means the worker owns an unexpired running job. Availability is observational, not a reservation or authentication guarantee.
-- The worker persists a private journal before running and persists its outcome before reporting. A network error stops the current simulation; it retries with bounded exponential backoff and a 5-second request timeout. On restart it renews the saved claim before repeating the simulation, or drops the journal if the lease was lost. A saved outcome is resent without repeating simulation work.
-- Execution is **at least once**, not exactly once. A paused process can overlap a new lease owner after expiration; claim tokens prevent stale writes, while predefined simulations have no external side effects. Real execution would require idempotent effects and stronger fencing before integration.
-- An exclusive local lock prevents two processes from using one journal. Ctrl-C/SIGTERM preserves the journal and removes the lock. After SIGKILL/power loss, inspect the PID in `.worker/<principal>/lock` and verify the process is gone before removing **only that lock**. Keep `journal.json`. Never delete a live worker's lock or recovery files.
-- Lost create responses can be retried with the same UUID `Idempotency-Key` and identical body. Different content with the same key returns 409. The dashboard disables double-click submissions; for ambiguous network failures use the API with a stable request ID or inspect the list before submitting again.
-
-This is a small trusted POC: one queue, no cancellation/requeue UI, no rate limiting, no scheduler, no external side effects. The dashboard shows the latest 100 jobs. Timestamp pagination is a convenience and can skip exact timestamp ties; retain job IDs and use individual lookups for integrations. The Next.js database credential is privileged and belongs only on the server. Before exposing this beyond a controlled temporary test, add operational limits and provision a dedicated least-privilege database role.
-
-## Verification
+## Worker
 
 ```sh
-npm test
-npm run typecheck
-npm run build
+CONDUIT_API_URL=https://conduit-poc.vercel.app \
+WORKER_KEY_FILE=.secrets/worker-hosted.json \
+WORKER_STATE_DIR=.worker/hosted-mac-worker \
+npm run worker
 ```
 
-Tests start their own PostgreSQL server on an ephemeral loopback port, apply the actual migration, and delete the temporary database afterwards. They do not read `.env.local` or contact cloud resources. They exercise request authentication/roles, creation/idempotency/validation, concurrent claims, `SKIP LOCKED`, claim-token secrecy, completion/failure, stale claims, attempt exhaustion, restart recovery, lost completion responses, availability, and private schema permissions/RLS. They call the same Request/Response handler used by Next.js, with real SQL rather than a mocked queue.
+`ORCHESTRATOR_URL` remains a compatibility alias; `CONDUIT_API_URL` takes precedence. Use the stable Vercel project domain, not a disposable preview URL. The worker needs only its API URL, private key file and local state directory—**no database connection or Supabase administrative key**. `.env.worker.example` is a template; the worker reads the process environment, not `.env.local`.
 
-Optional real-browser smoke test (requires installed Google Chrome, a running local API and worker):
+Use a new state directory for the new hosted queue and one worker identity per running instance. The worker binds state to its API origin to prevent reusing recovery tokens on a different host. Keep that directory across restarts. Worker logs are JSON lines with worker/job IDs and progress, never bearer keys or claim tokens. Keep your Mac awake and the worker running during the POC.
 
-```sh
-SUBMITTER_KEY_FILE=.secrets/submitter-dashboard-TIMESTAMP.json npm run smoke:browser
+The worker polls every two seconds, reports progress during five bounded simulation steps, and uses 10-second HTTP timeouts. Network failures stop work and retry with bounded exponential backoff (1–10 seconds). The journal persists the claim before work and the outcome before reporting. A restarted worker renews a still-valid claim, retries a saved outcome, or drops a stale claim after HTTP 409. HTTP 401/403 stops the worker so you can replace/reconfigure its credential.
+
+Ctrl-C/SIGTERM preserves the journal and removes the process lock. After a crash/SIGKILL, verify the recorded lock PID is no longer running before removing **only** `.worker/<state>/lock`; keep `journal.json` and `origin`. Do not run two workers with the same identity/state.
+
+## API contract
+
+Every `/api/*` operation requires `Authorization: Bearer <cnd_live_…>`. Requests and JSON responses keep the original shape. No automatic redirects are followed by the worker/probe. Use HTTPS except for loopback development.
+
+| Endpoint                                         | Required scope | Behavior                                             |
+| ------------------------------------------------ | -------------- | ---------------------------------------------------- |
+| `POST /api/jobs`                                 | `jobs:create`  | Create; UUID `Idempotency-Key` header required       |
+| `GET /api/jobs?limit=100&before=<ISO timestamp>` | `jobs:read`    | Own jobs only; newest first, maximum 100             |
+| `GET /api/jobs/:id`                              | `jobs:read`    | Own job status/result/error/timestamps               |
+| `GET /api/workers`                               | `jobs:read`    | Existing worker availability endpoint; no UI         |
+| `POST /api/heartbeat`                            | `jobs:update`  | Update this worker identity's last-seen timestamp    |
+| `POST /api/claim`                                | `jobs:claim`   | Atomic claim or `{ "job": null }`                    |
+| `POST /api/jobs/:id/report`                      | `jobs:update`  | Progress/completion/failure with current claim token |
+
+Create body:
+
+```json
+{
+  "title": "Connectivity test",
+  "description": "Optional",
+  "task": "simulate-development"
+}
 ```
 
-The browser test submits a real simulation and checks the displayed result against the API. It saves a credential-free screenshot under ignored `output/playwright/`. It does not print or persist the browser's Authorization headers.
+Only `simulate-development` and `simulate-failure` are allowed. Unknown fields are rejected. Request bodies are capped at 32 KiB; title at 200 characters, description/error at 4000. No command, code, or shell task can be submitted.
 
-See [manual acceptance tests](docs/manual-test.md), [Instinct integration](docs/instinct.md), and [verification evidence](docs/verification.md).
+Job responses use `{ "job": ... }`; lists use `{ "jobs": [...] }`. Submitter responses never contain claim tokens. Status values remain `queued`, `running`, `completed`, `failed`. Errors remain 400 invalid input, 401 missing/invalid/expired/revoked key, 403 missing scope, 404 missing/unowned job/route, 409 stale claim or idempotency conflict, 500 sanitized internal error. Key-management paths do not exist.
+
+Use the same UUID and identical body to retry an ambiguous creation response. Timestamp pagination can skip exact timestamp ties; integrations should retain job IDs and retrieve results individually.
+
+## Queue guarantees
+
+The queue SQL is unchanged. `FOR UPDATE SKIP LOCKED` plus a single update atomically assigns a random per-attempt token, worker identity, 30-second lease and incremented attempt count. Progress extends the lease using database time. All updates are fenced by worker ID, token and unexpired running lease. Repeated terminal acknowledgments preserve the first result. Different workers cannot hold the same unexpired claim.
+
+Execution remains **at least once**, not exactly once. A paused process may resume after another worker reclaims its expired lease; stale tokens cannot overwrite the new attempt. Simulations have no external effects. After three abandoned attempts a job becomes failed on the next claim poll; there is no background sweeper. Worker availability is observational (heartbeat within 15 seconds), not a reservation.
+
+## Database and deployment
+
+- `20261104221612_job_queue.sql`: original private schema and queue.
+- `20261104232105_persistent_api_keys.sql`: upgrade existing key table, retain jobs, revoke legacy credentials.
+- `20261104232106_runtime_permissions.sql`: restricted server group, job/worker RLS policies and narrow private key-authentication function.
+- `20261104233846_key_administrator_role.sql`: separate key-administrator role with API-key permissions and no job/runtime access.
+
+The runtime cannot access the key table directly. Its only credential operation is a private `SECURITY DEFINER` function that validates a hash and updates `last_used_at`; it has an empty search path, explicit runtime-only execution grant and no dynamic SQL. No `anon`/`authenticated` grants are added. All key-management and migration access stays with the local administrator.
+
+Supabase transaction pooling suits the stateless API; admin migrations use a session/direct connection. No named prepared statements or session-dependent runtime SQL are used. The server pool is capped at three connections per instance and uses Vercel's `attachDatabasePool`. Remote database connections require verified TLS; URL options that could override TLS configuration are rejected. Only a server-side `DATABASE_URL` is required—there is no browser Supabase client or service-role API key.
+
+See [the deployment runbook](docs/deployment.md), [acceptance tests](docs/manual-test.md), and [verification evidence](docs/verification.md).
+
+## Connectivity and credential checks
+
+- `GET /health` is public. HTTP 200 with `status: "ok"` and `database: "ok"` means the API can query the jobs schema in Supabase. HTTP 503 means readiness failed. This does not promise a worker is online.
+- `GET /auth-check` uses `Authorization: Bearer <key>`. HTTP 200 with `authenticated: true` and `instinct_access: true` verifies both Instinct scopes (`jobs:create`, `jobs:read`). HTTP 401 means missing/invalid/expired/revoked credentials. HTTP 403 with `authenticated: true` means a valid key lacks Instinct permissions (including a worker key). HTTP 503 means the service could not validate the credential. Responses include principal/scopes/permission booleans, never plaintext keys or hashes.
+
+Both checks disable caching. Use `/api/workers` with the Instinct key to check worker availability, then POST a simulation and retrieve its result to prove the full loop.

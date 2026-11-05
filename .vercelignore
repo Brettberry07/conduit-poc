@@ -1,0 +1,17 @@
+.git
+.env*
+.secrets
+.local-pg*
+.worker
+.next
+.next-test*
+.tsconfig-test-*
+node_modules
+output
+.playwright-cli
+scripts
+tests
+docs
+supabase
+*.log
+*.tsbuildinfo
