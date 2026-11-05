@@ -8,7 +8,7 @@ CREATE TABLE orchestrator.auth_users (
 ALTER TABLE orchestrator.auth_users ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON orchestrator.auth_users FROM PUBLIC;
 GRANT SELECT ON orchestrator.auth_users TO conduit_api;
-CREATE POLICY runtime_auth_users FOR SELECT TO conduit_api USING(true);
+CREATE POLICY runtime_auth_users ON orchestrator.auth_users FOR SELECT TO conduit_api USING(true);
 -- Reuse the separately provisioned administrator login, never the runtime login.
 GRANT SELECT,INSERT,DELETE ON orchestrator.auth_users TO conduit_key_admin;
 CREATE POLICY administrator_auth_users ON orchestrator.auth_users
