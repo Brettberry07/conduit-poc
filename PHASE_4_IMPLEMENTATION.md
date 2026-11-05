@@ -1,6 +1,6 @@
 # Phase 4 implementation handoff
 
-Implemented in the existing `conduit-poc` checkout. The Vercel Next.js API, private Supabase PostgreSQL queue, persistent API keys, local TypeScript worker, existing simulations, Phase 3 sandbox executor, lease fencing and worker journal remain in place. Changes are uncommitted for review. No hosted migration, deployment, GitHub settings change or PR merge was performed. The explicitly requested live proof created a feature branch and draft PR as recorded below.
+Implemented in the existing `conduit-poc` checkout. The Vercel Next.js API, private Supabase PostgreSQL queue, persistent API keys, local TypeScript worker, existing simulations, Phase 3 sandbox executor, lease fencing and worker journal remain in place. Changes are uncommitted for review. The original implementation made no hosted changes. The later explicitly authorized rollout applied the Phase 4 migration, deployed the API and registered Conduit as recorded below. No GitHub settings change or PR merge was performed.
 
 ## Architecture changes
 
@@ -131,7 +131,11 @@ Validation on November 5, 2026:
 - Disposable smoke tests accept public/private marked repositories and retain the explicit test allowlist and production-Conduit rejection.
 - `npm run build`, `npm run typecheck` and `git diff --check`: passed.
 
-The hosted API currently returns **404 for `/api/projects`**. It needs the existing Phase 4 release/migration before Instinct can use the hosted development endpoints. No hosted migration, deployment or GitHub settings changes were performed here.
+The subsequent authorized hosted rollout is complete: Phase 4 migration `20261105062426_persistent_projects.sql` and its checksum were recorded; deployment `dpl_AKTULmzcVJczkWGb8YkkF64chNyr` serves pushed commit `406557e443cd1175963b9434b6ecef3da2361eb4`; Conduit project `888e3eae-a7db-4d55-959f-34e738466191` is registered; and the worker runs from private configuration under `~/.conduit/hosted` with its existing hosted journal.
+
+Authenticated `/api/projects` returns 200, anonymous requests return 401, and the new same-principal Instinct key includes revision scope. Hosted readiness simulation `7988bf84-d652-430b-bcb9-920cb83a1512` completed on `mac-worker`. The replacement key is delivered privately in `.secrets/instinct-phase4.json`; the old key remains active during handoff. Supabase's security advisor reports only the pre-existing intentional no-policy migration registry (RLS denies non-admin access). No schema-administrator password was recovered or reset; the connected Supabase account handled schema and registration. The saved key-admin pooler connection timed out, so the replacement key was registered through the connector using only a locally generated hash; plaintext stayed in the private local delivery file.
+
+The user must install that key in Instinct's secure settings and send [the prepared prompt](docs/instinct-phase4-test-prompt.md). No claim of an actual request originating from Instinct is made. See `output/phase4-hosted-readiness.json` for local evidence and `docs/deployment.md` for the current deployment record.
 
 ## Real GitHub and Codex workflow proof
 
@@ -143,7 +147,7 @@ At the user's explicit request, a normal development job ran against `Brettberry
 - Default `main` SHA before and after: `5ca98f94c35d64be4a464ff68d5960ec64d8d387` (unchanged).
 - Evidence: private ignored `output/phase4-prototype-live.json`, including original/revision results and actual API diffs. The script checked results and worker logs for the GitHub credential and both API keys; none were present. Worktrees, local registry and recovery state were retained outside the checkout under `~/.conduit/phase4-local-proof-*`.
 
-An initial locally authored verification regex was escaped incorrectly. That attempt failed verification, preserved its worktree and published nothing; a fresh job with the corrected check produced the successful evidence above. The local proof exercises the authenticated contract used by Instinct; it is not a claim that the currently deployed hosted API supports Phase 4. The existing hosted Phase 3 worker was left running without configuration changes.
+An initial locally authored verification regex was escaped incorrectly. That attempt failed verification, preserved its worktree and published nothing; a fresh job with the corrected check produced the successful evidence above. The local proof exercises the authenticated contract used by Instinct; it is not a claim that the currently deployed hosted API supports Phase 4. The existing hosted Phase 3 worker was left unchanged during the local proof; it was later stopped cleanly and replaced by the configured Phase 4 worker during the authorized rollout.
 
 ## Known limits and manual work
 

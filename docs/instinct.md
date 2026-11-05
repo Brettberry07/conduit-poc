@@ -2,6 +2,14 @@
 
 The earlier Cloudflare/local-PostgreSQL communication loop was verified by Instinct. The new Vercel/Supabase loop is deployed and verified from the Mac worker. A request from Instinct itself is still the final external acceptance gate. Use **https://conduit-poc.vercel.app** and the new `.secrets/instinct-hosted.json` delivery file; the earlier hourly key is not registered in this hosted database.
 
+## Phase 4 handoff
+
+The hosted API and Mac worker now support registered development jobs and same-PR revisions. For Phase 4 use `.secrets/instinct-phase4.json` instead of the earlier delivery file; it has create/read/revise scopes and the same `instinct` principal. The older key remains active during handoff. Run `/Users/brettberry/.conduit/hosted/copy-instinct-key.sh` locally, paste into Instinct's secure secret field, and send [the prepared Phase 4 test prompt](instinct-phase4-test-prompt.md). No GitHub or database credential belongs in Instinct.
+
+## Normal development tasks
+
+The current worker registration permits normal source, test, documentation and configuration changes throughout the registered repository. It is no longer limited to the probe document. Verification uses Next route types, TypeScript and offline unit tests; existing dependencies are shared read-only. Credentials, Git metadata, generated output, dependency stores and GitHub workflow files retain mandatory protections. Work stays on feature branches/draft PRs, with human merge/deployment. Use [the development handoff](instinct-development-prompt.md) to submit the requested /info task.
+
 ## Secure key provisioning
 
 The initial hosted key is already generated in `.secrets/instinct-hosted.json` and expires December 4, 2026. Do not generate another key merely to finish the first test. Copy its token privately:
