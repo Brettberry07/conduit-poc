@@ -1,6 +1,7 @@
 import { developmentApi } from "./development-api";
 import { DevelopmentError } from "./development";
-import { authenticate, requiredScope } from "./keys";
+import { requiredScope } from "./keys";
+import { authenticateConsole } from "./auth";
 import { z } from "zod";
 import type { DB } from "./db";
 import { claim, report, publicColumns } from "./queue";
@@ -80,7 +81,8 @@ async function body(req: Request, max = 32768) {
 export async function handle(req: Request, db: DB): Promise<Response> {
   try {
     const authorization = req.headers.get("authorization") ?? "";
-    const key = await authenticate(db, authorization);
+    const key = await authenticateConsole(db, authorization);
+    if (key === "unlinked") return json({ error: "account not linked" }, 403);
     if (!key) return json({ error: "Unauthorized" }, 401);
     const path = new URL(req.url).pathname;
     const method = req.method;

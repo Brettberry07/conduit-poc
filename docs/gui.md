@@ -1,5 +1,9 @@
 # Conduit web console
 
+Connect also offers email/password **Sign in** and **Sign up** when both `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are configured. These use GoTrue REST directly. Email confirmation may be required before sign-in. Signing up grants no workspace access: an administrator must explicitly link the Auth user UUID to a principal. Unlinked accounts see “This account isn't linked to any Conduit workspace yet.” Linked accounts have exactly `jobs:read` for that principal and cannot create, revise, claim or update jobs.
+
+Unlike the memory-only key option below, email sessions (including access and refresh tokens) persist in localStorage under `conduit.auth.session`, so refreshing keeps you signed in. **This makes the tokens reachable by any script on the origin while the strict CSP is deferred.** Use a trusted device. Sign out calls GoTrue logout and clears localStorage even if remote logout fails. A 401 triggers one refresh attempt; failure drops the session. With either public environment variable absent, email forms are hidden and the key option remains available.
+
 Open `/app` (redirects to `/app/board`). Paste a **viewer key with only `jobs:read`** into Connect. The browser keeps it in React memory only; refresh, disconnect, or closing the page loses it. It is never sourced from server configuration, persisted, or placed in a URL. Reads use same-origin GET requests with a Bearer header. Use a trusted device and HTTPS deployment.
 
 Issue a viewer key locally with the [key-management CLI](operator-guide.md#persistent-api-keys), using the same principal as the job owner:
@@ -18,4 +22,4 @@ Polling runs about every three seconds while visible and pauses when hidden. Err
 
 Cmd/Ctrl+B toggles the desktop sidebar. Cmd/Ctrl+K opens navigation and filtering. Enter activates cards; Escape closes native modal dialogs with focus restored. Mobile uses bottom navigation and full-screen detail sheets. This console is read-only.
 
-Security headers apply only to `/app` routes. A strict script CSP is deferred: Next's inline bootstrap scripts require a coordinated nonce strategy; a static policy would break hydration. No inline eval policy is added. Existing API and authentication behavior is unchanged.
+Security headers apply only to `/app` routes. A strict script CSP is deferred: Next's inline bootstrap scripts require a coordinated nonce strategy; a static policy would break hydration. No inline eval policy is added. Existing API-key authentication behavior is unchanged.

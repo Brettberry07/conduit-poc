@@ -4,6 +4,24 @@
 
 Local setup, credentials, queue semantics and worker recovery, consolidated from the original README. For registered GitHub development, use the [project/worktree runbook](../PHASE_4_TESTING.md). For hosted setup, use the [deployment runbook](deployment.md). These instructions describe operator procedures, not the current state of any private installation. The package remains `conduit-poc`; the private database schema remains `orchestrator` to preserve migration compatibility.
 
+## Supabase Auth account links
+
+Apply the auth-users migration before enabling email sign-in. Use the existing private admin environment (`.env.admin.local` / `ADMIN_DATABASE_URL`) with `adminDatabase()`; the runtime can only SELECT mappings. The existing `conduit_key_admin` group gains SELECT/INSERT/DELETE on mappings, with an administrator RLS policy; UPDATE is not granted. Ordinary Auth accounts cannot create or modify mappings. Link only a verified Auth user UUID to the intended principal, never by matching an email address. A new account has no job access until explicitly linked.
+
+```sh
+npm exec -- tsx scripts/user.ts link --auth-user-id UUID --principal PRINCIPAL
+npm exec -- tsx scripts/user.ts list
+npm exec -- tsx scripts/user.ts unlink --auth-user-id UUID
+```
+
+The CLI uses the same principal validation as key administration, refuses duplicate UUIDs, and lists mapping metadata only. To change a mapping, explicitly unlink first. The requested `npm run user -- ...` alias would require changing package.json; because package files must remain unchanged, use the direct commands above.
+
+**OPERATOR CHECKS (not verified facts):**
+
+- Check whether email/password sign-ups are enabled in Supabase Auth.
+- Check whether email confirmation is required and configure its delivery and URLs.
+- Set both publishable `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in the hosting environment before building; Next.js inlines public client values at build time. The server derives its public JWKS URL and issuer from that URL. Use ES256 signing keys. If the URL is unset, JWT authentication is disabled.
+
 ## Local setup and full verification
 
 Use Node.js **24.x**, the Vercel runtime target, and npm:
