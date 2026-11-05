@@ -1,1 +1,1 @@
-Conduit prototype workflow: original.
+Conduit prototype workflow: revised.
