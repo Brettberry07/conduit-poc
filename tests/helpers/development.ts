@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { GitHubSecurity } from "../../worker/development/github-policy";
 import { GitHub, type Project } from "../../worker/development/github";
 import {
   git,
@@ -61,7 +62,10 @@ export async function fixture() {
   };
   return { dir, repo, remote, start, project, config };
 }
-export function fakeGitHub(f: Awaited<ReturnType<typeof fixture>>) {
+export function fakeGitHub(
+  f: Awaited<ReturnType<typeof fixture>>,
+  security: GitHubSecurity = { policy: "strict_bot" },
+) {
   let raw: any,
     createCount = 0,
     lostCreate = false,
@@ -85,11 +89,27 @@ export function fakeGitHub(f: Awaited<ReturnType<typeof fixture>>) {
       return response({
         full_name: "example/disposable",
         default_branch: "main",
-        permissions: { push: true, admin: false, maintain: false },
+        owner: { login: "example", type: "User" },
+        archived: false,
+        permissions: {
+          pull: true,
+          push: true,
+          admin: security.policy === "prototype",
+          maintain: false,
+        },
         allow_auto_merge: unsafe,
       });
+    if (path === "/user") return response({ login: "example" });
+    if (path === "/branches/main")
+      return response({
+        name: "main",
+        protected: security.policy === "strict_bot",
+      });
+    if (path === "/branches/main/protection") return response({}, 404);
     if (path.startsWith("/rules/branches/"))
       return response([
+        { type: "non_fast_forward" },
+        { type: "deletion" },
         { type: "update", ruleset_id: 1, ruleset_source_type: "Repository" },
         {
           type: "pull_request",
@@ -146,7 +166,7 @@ export function fakeGitHub(f: Awaited<ReturnType<typeof fixture>>) {
     throw Error("Unexpected GitHub call " + method + " " + path);
   };
   return {
-    github: new GitHub("github_pat_TEST_ONLY", transport),
+    github: new GitHub("github_pat_TEST_ONLY", transport, undefined, security),
     calls,
     get creates() {
       return createCount;

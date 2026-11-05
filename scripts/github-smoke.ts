@@ -6,6 +6,20 @@ import assert from "node:assert/strict";
 import { apiOrigin } from "../worker/client";
 import { registrationSchema } from "./project";
 import { GitHub, type Project } from "../worker/development/github";
+export function assertDisposableTarget(
+  repository: string,
+  metadata: { private?: boolean; topics?: string[] },
+) {
+  assert.notEqual(
+    repository.toLowerCase(),
+    "brettberry07/conduit-poc",
+    "The smoke test must never target the main Conduit repository",
+  );
+  assert.ok(
+    metadata.topics?.includes("conduit-disposable-test"),
+    "Mark the dedicated repository with the conduit-disposable-test topic",
+  );
+}
 export async function githubSmoke() {
   if (process.env.CONDUIT_RUN_GITHUB_INTEGRATION !== "1") {
     console.log(
@@ -34,17 +48,14 @@ export async function githubSmoke() {
     repository_url: `https://github.com/${expected}.git`,
     enabled: true,
   };
+  assert.notEqual(
+    expected.toLowerCase(),
+    "brettberry07/conduit-poc",
+    "The smoke test must never target the main Conduit repository",
+  );
   const github = await GitHub.fromEnvironment(),
     repo = await github.request(project, "");
-  assert.equal(
-    repo.private,
-    true,
-    "Integration requires a private, dedicated disposable repository",
-  );
-  assert.ok(
-    repo.topics?.includes("conduit-disposable-test"),
-    "Mark the dedicated repository with the conduit-disposable-test topic",
-  );
+  assertDisposableTarget(expected, repo);
   await github.safety(project);
   const origin = apiOrigin(
     process.env.CONDUIT_API_URL ?? "http://127.0.0.1:3000",

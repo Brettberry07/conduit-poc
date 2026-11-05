@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -29,12 +29,28 @@ async function freePort() {
   await new Promise<void>((r) => server.close(() => r()));
   return port;
 }
-test(
+function policyTest(
+  name: string,
+  options: { timeout: number },
+  run: (t: TestContext, policy: "strict_bot" | "prototype") => Promise<void>,
+) {
+  for (const policy of ["strict_bot", "prototype"] as const)
+    test(`${name} (${policy})`, options, (t) => run(t, policy));
+}
+policyTest(
   "Phase 4 API, fenced queue, actual Git, publication recovery, revisions and dependencies",
   { timeout: 120000 },
-  async (t) => {
+  async (t, policy) => {
+    const security =
+      policy === "strict_bot"
+        ? { policy }
+        : {
+            policy,
+            acknowledge_prototype_risk: true as const,
+            approved_repositories: ["example/disposable"],
+          };
     const f = await fixture(),
-      fake = fakeGitHub(f),
+      fake = fakeGitHub(f, security),
       port = await freePort();
     const postgres = new EmbeddedPostgres({
       databaseDir: join(f.dir, "db"),
@@ -131,7 +147,10 @@ test(
         acceptance_criteria: "Configured checks pass",
       };
       const submit = async (extra = {}) => {
-        const response = await req("/api/jobs", "POST", { ...input, ...extra });
+        const response = await req("/api/jobs", "POST", {
+          ...input,
+          ...extra,
+        });
         assert.equal(response.status, 201, await response.clone().text());
         return (await response.json()).job;
       };
@@ -197,6 +216,8 @@ test(
             { base_branch: "../main" },
             { repository_url: "https://evil.invalid" },
             { command: "touch /tmp/evil" },
+            { github_security: { policy: "prototype" } },
+            { github_token: "ghp_REMOTE_TEST_ONLY" },
             { dependency_job_ids: [randomUUID()] },
           ])
             assert.equal(
@@ -260,6 +281,21 @@ test(
             await req(`/api/jobs/${root.id}`)
           ).json();
           assert.equal(final.status, "completed");
+          assert.ok(
+            fake.calls.every(
+              (c) =>
+                !c.path.includes("/merge") &&
+                !["PUT", "DELETE"].includes(c.method),
+            ),
+          );
+          assert.equal(final.result.github_security.policy, policy);
+          if (policy === "prototype") {
+            assert.match(
+              final.result.warnings.join(" "),
+              /credential may retain merge/,
+            );
+            assert.match(fake.pr.body, /credential may retain merge/);
+          }
           assert.equal(final.claim_token, undefined);
           assert.equal(JSON.stringify(final).includes(f.dir), false);
           assert.equal(final.result.verification.status, "passed");
@@ -387,7 +423,7 @@ test(
         "failed verification retains changes and publishes nothing",
         async () => {
           // Independent publication uses a fresh fake GitHub instance because it models one PR branch.
-          const independentFake = fakeGitHub(f),
+          const independentFake = fakeGitHub(f, security),
             old = deps.github;
           deps.github = independentFake.github;
           const j = await submit();
@@ -426,7 +462,7 @@ test(
       await t.test(
         "push then GitHub failure can be reconciled without another Codex execution or duplicate PR",
         async () => {
-          const isolated = fakeGitHub(f),
+          const isolated = fakeGitHub(f, security),
             old = deps.github;
           deps.github = isolated.github;
           const j = await submit(),
@@ -471,7 +507,7 @@ test(
             "pushed",
             "published",
           ]) {
-            const isolated = fakeGitHub(f),
+            const isolated = fakeGitHub(f, security),
               old = deps.github;
             deps.github = isolated.github;
             const created = await submit(),
@@ -530,6 +566,40 @@ test(
               ["interrupted", "completed"],
             );
             deps.github = old;
+          }
+        },
+      );
+      await t.test(
+        "worker rejects base publication targets before attempting a push",
+        async () => {
+          for (const target of ["main", "conduit/job-approved-base"]) {
+            const created = await submit(),
+              { job } = await call("/api/claim", {});
+            assert.equal(job.id, created.id);
+            const originalPush = deps.network!.push;
+            let pushes = 0;
+            deps.network!.push = async (...args) => {
+              pushes++;
+              return originalPush(...args);
+            };
+            try {
+              const outcome = await run({
+                ...job,
+                publication: { ...job.publication, branch: target },
+                project_record: {
+                  ...job.project_record,
+                  allowed_base_branches: ["main", "conduit/job-approved-base"],
+                },
+              });
+              assert.equal(outcome.action, "blocked");
+              assert.equal(pushes, 0);
+              assert.equal(
+                await remoteHead(f.repo, f.remote, "main", undefined, true),
+                f.start,
+              );
+            } finally {
+              deps.network!.push = originalPush;
+            }
           }
         },
       );

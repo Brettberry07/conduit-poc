@@ -43,10 +43,11 @@ export async function validateRegistration(raw: unknown, github: GitHub) {
   };
   const local = localProjectSchema.parse({ ...input.local, project_id: id });
   await storage(local);
+  let githubSecurity;
   for (const base of project.allowed_base_branches)
-    await github.safety(project, base);
+    githubSecurity = await github.safety(project, base);
   await initializeRepository(local, project, github.gitToken());
-  return { project, local };
+  return { project, local, github_security: githubSecurity };
 }
 async function main() {
   const { values, positionals } = parseArgs({
@@ -142,7 +143,17 @@ async function main() {
       mode: 0o600,
     });
     await rename(target + ".tmp", target);
-    console.log(JSON.stringify({ project: p, local_config: target }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          project: p,
+          local_config: target,
+          github_security: approved!.github_security,
+        },
+        null,
+        2,
+      ),
+    );
   } finally {
     if (lock) await rm(lock, { force: true });
     await db.end();
@@ -155,7 +166,7 @@ if (
 )
   main().catch(() => {
     console.error(
-      "Project administration failed; check options, private configuration, Git access, rulesets and schema-administrator permissions. " +
+      "Project administration failed; check options, private configuration, Git access, selected local security mode and schema-administrator permissions. " +
         usage,
     );
     process.exitCode = 1;

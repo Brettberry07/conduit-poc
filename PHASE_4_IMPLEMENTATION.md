@@ -1,6 +1,6 @@
 # Phase 4 implementation handoff
 
-Implemented in the existing `conduit-poc` checkout. The Vercel Next.js API, private Supabase PostgreSQL queue, persistent API keys, local TypeScript worker, existing simulations, Phase 3 sandbox executor, lease fencing and worker journal remain in place. Changes are uncommitted for review. No cloud migration, deployment, GitHub repository mutation or PR merge was performed during implementation.
+Implemented in the existing `conduit-poc` checkout. The Vercel Next.js API, private Supabase PostgreSQL queue, persistent API keys, local TypeScript worker, existing simulations, Phase 3 sandbox executor, lease fencing and worker journal remain in place. Changes are uncommitted for review. No hosted migration, deployment, GitHub settings change or PR merge was performed. The explicitly requested live proof created a feature branch and draft PR as recorded below.
 
 ## Architecture changes
 
@@ -59,15 +59,19 @@ npm run development:admin -- retry --job-id JOB_UUID
 npm run development:admin -- cleanup --job-id JOB_UUID
 ```
 
-Set `CONDUIT_PROJECTS_FILE` to the private persistent registry. Registration validates remote identity, base refs, GitHub access, local paths and human-only merge policy. Retry is limited to intact prepared/verified publication recovery states and preserves prior attempts. Cleanup refuses active, dirty, conflicted or unpublished work and uses ordinary non-forced worktree removal; branches and history remain.
+Set `CONDUIT_PROJECTS_FILE` to the private persistent registry. Registration validates remote identity, base refs, GitHub access, local paths and the selected local security mode. Retry is limited to intact prepared/verified publication recovery states and preserves prior attempts. Cleanup refuses active, dirty, conflicted or unpublished work and uses ordinary non-forced worktree removal; branches and history remain.
 
 ## GitHub setup and merge boundary
 
-Use an existing dedicated bot with ordinary repository Write access and a fine-grained token restricted to selected repositories, Contents read/write, Pull requests read/write and Metadata read. Store it in a private mode-600 `CONDUIT_GITHUB_TOKEN_FILE`, outside project/worktree storage.
+Two worker-local modes are supported: `strict_bot` (default) and `prototype` (explicit development-only opt-in). `CONDUIT_GITHUB_SECURITY_FILE` selects a mode through a private mode-600 JSON file. Prototype requires an exact `approved_repositories` allowlist and `acknowledge_prototype_risk: true`. Neither job nor registration payloads can select the mode. Invalid configuration fails without fallback; distributed defaults remain strict.
 
-GitHub hides ruleset bypass actors from accounts without ruleset write access. Where necessary, configure a separate mode-600 `CONDUIT_GITHUB_POLICY_TOKEN_FILE` from a human administrator account with **only Administration read and Metadata read**. It supplies read-only ruleset inspection; code prevents using it on other routes or mutations. It must have no Contents write, Pull requests write or Administration write grants. It is never supplied to Git, Codex or verification.
+Strict mode retains fine-grained publisher PATs, non-admin/non-maintain identity checks, disabled auto-merge and verifiable active update restrictions with admin-only bypass plus at least one approval. The optional read-only audit token still supports hidden ruleset bypass actors.
 
-Disable auto-merge. Protect every approved base branch with an active update restriction allowing only repository administrators to bypass, and require PR review. The bot must have no admin, maintain or bypass role. Registration/publication fail closed when this cannot be verified. This repository permission/ruleset boundary prevents the bot credential from updating protected bases even after approval; draft status and prompt instructions are additional controls. See the runbook for supported rulesets and GitHub documentation links.
+Prototype uses `CONDUIT_GITHUB_TOKEN_FILE` when explicitly configured, otherwise it retrieves the existing local CLI login with fixed `gh auth token --hostname github.com` arguments. It accepts classic and fine-grained PATs plus CLI OAuth credentials, including the repository owner. Credential-file failures never silently switch identities. No bot, rulesets, mandatory approvals, Administration permission or policy-audit credential is required. It verifies registered/allowlisted repository identity, canonical remote, expected default branch, approved base existence, read/write access and non-archived state. It does not change repository settings.
+
+The trusted CLI subprocess has bounded output/time, an explicit environment and sanitized errors. Codex/checks keep their isolated environment and sandbox, with added denials for CLI configuration and local Keychain storage. Tokens never enter jobs, API responses, artifacts or logs. Only trusted Git receives an ephemeral askpass credential. CLI environment token overrides are excluded; administrators can use a mode-600 token file instead.
+
+Owner/CLI/classic credentials can retain administrative and merge permissions outside Conduit's code. Local allowlisting cannot constrain a stolen token. Prototype is for local development only. Feature-branch publication, no force push, no default/base writes, draft-only PRs, human merging, API authentication, ownership checks, worktree isolation and recovery remain intact. Mode and credential-free risk warnings appear in registration output, results and draft PRs. See `PHASE_4_TESTING.md` for exact setup and strict-mode restoration.
 
 ## Commands to start and test
 
@@ -87,18 +91,17 @@ CONDUIT_API_URL=https://YOUR-PROJECT.vercel.app \
 WORKER_KEY_FILE=/ABSOLUTE/PATH/.secrets/worker.json \
 WORKER_STATE_DIR=/ABSOLUTE/PATH/.worker/hosted-phase4 \
 CONDUIT_PROJECTS_FILE=/Users/YOU/Conduit/config/projects.json \
-CONDUIT_GITHUB_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-token \
-CONDUIT_GITHUB_POLICY_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-policy-read-token \
+CONDUIT_GITHUB_SECURITY_FILE=/Users/YOU/Conduit/config/github-security.json \
 npm run worker
 ```
 
 Use official standalone Node 24 for real Codex. Rotate Instinct's key with the same principal if the existing key lacks `jobs:revise`. Send the JSON development/revision examples in `PHASE_4_TESTING.md` with bearer authentication and a UUID `Idempotency-Key`.
 
-For the opt-in demonstration, first create/configure a private dedicated disposable repository and mark it with topic `conduit-disposable-test`, then:
+For the opt-in demonstration, first create/configure a public or private dedicated disposable repository and mark it with topic `conduit-disposable-test`, then:
 
 ```sh
 CONDUIT_RUN_GITHUB_INTEGRATION=1 \
-CONDUIT_GITHUB_TEST_REPOSITORY=YOUR_OWNER/YOUR_PRIVATE_DISPOSABLE_REPO \
+CONDUIT_GITHUB_TEST_REPOSITORY=YOUR_OWNER/YOUR_DISPOSABLE_REPO \
 CONDUIT_TEST_REGISTRATION_FILE=/ABSOLUTE/PATH/test-registration.json \
 SUBMITTER_KEY_FILE=/ABSOLUTE/PATH/.secrets/instinct.json \
 npm run smoke:github
@@ -106,7 +109,7 @@ npm run smoke:github
 
 Export the worker/API/project/policy/admin variables above first and keep the Mac worker running. The script registers the allowlisted project, submits through the configured API, awaits real Codex, verifies draft/diffs, submits a revision, checks the same PR receives a new head, and verifies the default branch SHA remains unchanged. Evidence goes to private ignored `output/phase4-UUID.json`.
 
-## Automated validation results
+## Original Phase 4 automated validation results
 
 On November 5, 2026:
 
@@ -118,10 +121,32 @@ On November 5, 2026:
 
 Tests use the actual migrations, disposable PostgreSQL, the existing real HTTP API/admin CLI/separate worker, real temporary Git repositories and worktrees, real commits/pushes to a local bare remote, and mocked GitHub/Codex for Phase 4. Coverage includes staged/unstaged checkout preservation; managed clones; independent jobs; added/modified/deleted/renamed/untracked changes; prohibited files/secrets; permission boundaries; revisions on the same PR; database/local locks; unexpected remote changes; dependency gates; project disablement during an active lease; failed verification; lost PR responses; and recovery after verified, committed, pushed and published checkpoints, including commit-before-journal reconciliation. No mock run is presented as a real GitHub/Codex integration success.
 
+## Prototype authentication validation
+
+Validation on November 5, 2026:
+
+- `CONDUIT_RUN_GITHUB_INTEGRATION=0 RUN_REAL_CODEX=0 npm test`: **83 tests; 81 passed, 0 failed, 2 skipped**. Both standard opt-in live tests were explicitly disabled.
+- The Phase 4 API/queue and actual local Git workflow runs under **both modes**, including same-PR revisions, actual diffs, independent tasks, dependency gates, failed verification, checkout preservation and publication recovery.
+- Authentication/policy coverage includes private configuration, strict default/no fallback, repository allowlisting, classic/fine-grained/CLI credentials, token-file precedence, sanitized CLI failures, scrubbed subprocess environments, strict audit tokens, retained strict protections and prototype operation with an unprotected base.
+- Disposable smoke tests accept public/private marked repositories and retain the explicit test allowlist and production-Conduit rejection.
+- `npm run build`, `npm run typecheck` and `git diff --check`: passed.
+
+The hosted API currently returns **404 for `/api/projects`**. It needs the existing Phase 4 release/migration before Instinct can use the hosted development endpoints. No hosted migration, deployment or GitHub settings changes were performed here.
+
+## Real GitHub and Codex workflow proof
+
+At the user's explicit request, a normal development job ran against `Brettberry07/conduit-poc`, using the existing local `gh auth` login, official Node 24, the real macOS Codex sandbox, an isolated local PostgreSQL/API queue and the actual worker. This did not invoke or bypass the disposable-only smoke test. It used an existing-checkout registration with separate worktree storage, changed only `docs/prototype-workflow-probe.md`, and performed no destructive cleanup or default-branch publication.
+
+- Original job: `926f6cbe-b6f9-40bc-8e3b-0891c225019f`; verification passed and the API returned the actual file metadata and diff.
+- Revision job: `88e2025e-795d-454c-bebb-09a53abf5401`; verification passed and a new commit updated the same branch and draft PR.
+- Draft PR: [Conduit prototype workflow proof](https://github.com/Brettberry07/conduit-poc/pull/1). It remains open, draft and unmerged for inspection.
+- Default `main` SHA before and after: `5ca98f94c35d64be4a464ff68d5960ec64d8d387` (unchanged).
+- Evidence: private ignored `output/phase4-prototype-live.json`, including original/revision results and actual API diffs. The script checked results and worker logs for the GitHub credential and both API keys; none were present. Worktrees, local registry and recovery state were retained outside the checkout under `~/.conduit/phase4-local-proof-*`.
+
+An initial locally authored verification regex was escaped incorrectly. That attempt failed verification, preserved its worktree and published nothing; a fresh job with the corrected check produced the successful evidence above. The local proof exercises the authenticated contract used by Instinct; it is not a claim that the currently deployed hosted API supports Phase 4. The existing hosted Phase 3 worker was left running without configuration changes.
+
 ## Known limits and manual work
 
-The live demonstration remains unverified: this session had no explicit opt-in, dedicated test registration or worker GitHub token. Cloud rollout, repository protections and credentials remain manual setup.
+The current sandbox disables network; Conduit's full PostgreSQL/HTTP suite cannot run inside it unchanged. An approved sandbox-compatible verification profile supports initial contributions; run the full suite manually before merging. Dependencies must be prepared locally in an administrator-approved directory. There is one active worker per queue, fresh Codex threads, bounded diffs and heuristic secret detection. Interrupted unverified edits, conflicts, partial clones and stale locks require operator review. Revision/project listings are capped at 100; PR reconciliation depends on the running worker. There is no automatic merge, deployment, branch stacking or destructive cleanup.
 
-The current sandbox disables network; Conduit's full PostgreSQL/HTTP test suite cannot run inside it unchanged. An approved sandbox-compatible verification profile can support initial Conduit contributions, but run the full suite manually before merging. Dependencies must be prepared locally in an administrator-approved directory. The implementation supports one active local worker, fine-grained dedicated-bot tokens, fresh Codex threads, strict admin-only ruleset bypass policies, bounded stored diffs and heuristic secret detection. Interrupted unverified edits, conflicts, partial clones and stale process locks require deliberate operator review. Revision/project listings are capped at 100; PR reconciliation depends on the running worker. There is no automatic merge, deployment, branch stacking or destructive cleanup.
-
-The complete setup, API payloads, recovery matrix, policy details and safe cleanup procedure are in `PHASE_4_TESTING.md`.
+The complete setup, API payloads, recovery matrix, policy details and cleanup procedure are in `PHASE_4_TESTING.md`. The disposable smoke test requires an explicit allowlist plus `conduit-disposable-test` marker and always rejects `Brettberry07/conduit-poc`.

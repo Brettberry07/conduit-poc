@@ -70,10 +70,10 @@ npm run key -- revoke KEY_UUID
 
 Listing returns metadata, scopes, prefix, expiration, revocation and last-used timestamps; it returns neither plaintext nor hashes. Revoke uses a unique key ID, so overlapping rotation can keep a replacement key valid. Principals identify job owners/workers independently of key IDs: rotate with the **same principal** to retain access and recovery ownership. A different principal creates a separate permission boundary.
 
-| Credential type | Scopes                      |
-| --------------- | --------------------------- |
+| Credential type     | Scopes                                    |
+| ------------------- | ----------------------------------------- |
 | Instinct (new keys) | `jobs:create`, `jobs:read`, `jobs:revise` |
-| Local worker    | `jobs:claim`, `jobs:update` |
+| Local worker        | `jobs:claim`, `jobs:update`               |
 
 Workers receive the task in the claim response and need no general `jobs:read` permission. Every protected request validates the hash, expiry, revocation and required scope using the database. Valid authentication updates `last_used_at`; there is no stale in-memory authorization cache. In-flight requests that already authenticated may finish during revocation; subsequent requests are denied.
 
@@ -160,4 +160,4 @@ See [PHASE_3_TESTING.md](PHASE_3_TESTING.md) for isolated TypeScript tasks, loca
 
 ## Phase 4: registered GitHub projects and persistent worktrees
 
-See [PHASE_4_TESTING.md](PHASE_4_TESTING.md) for the additive migration, local project registration, strict human-only merge policy, credential setup, worktree execution, review/diff endpoints, same-PR revisions, recovery commands and opt-in live demonstration. Existing simulation and Phase 3 sandbox contracts remain supported. Phase 4 introduces `jobs:revise` for newly issued Instinct keys; existing keys retain their original scopes. Cloud rollout and the live GitHub/Codex demonstration require the documented manual setup.
+See [PHASE_4_TESTING.md](PHASE_4_TESTING.md) for the additive migration, local project registration, default `strict_bot` and explicit `prototype` modes (existing gh login or a classic/fine-grained PAT in prototype), credential setup, worktree execution, review/diff endpoints, same-PR revisions, recovery commands and opt-in live demonstration. Existing simulation and Phase 3 sandbox contracts remain supported. Phase 4 introduces `jobs:revise` for newly issued Instinct keys; existing keys retain their original scopes. Cloud rollout and the live GitHub/Codex demonstration require the documented manual setup.

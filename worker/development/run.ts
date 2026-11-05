@@ -133,7 +133,10 @@ export async function executeDevelopment(
       !p.allowed_base_branches.includes(job.base_branch) ||
       publication.job_id !== job.root_job_id ||
       publication.project_id !== p.id ||
-      publication.base_branch !== job.base_branch
+      publication.base_branch !== job.base_branch ||
+      !publication.branch.startsWith("conduit/job-") ||
+      publication.branch === p.default_branch ||
+      p.allowed_base_branches.includes(publication.branch)
     )
       throw new Blocked("Project or branch is not approved");
     const network = dependencies?.network ?? networkDefaults;
@@ -144,7 +147,8 @@ export async function executeDevelopment(
       throw new Blocked(
         "Project has no administrator-approved worker-local configuration",
       );
-    await github.safety(p, job.base_branch);
+    const githubSecurity = await github.safety(p, job.base_branch);
+    result.github_security = githubSecurity;
     const { root } = await storage(config),
       repo = await network.initialize(config, p, github.gitToken());
     const executionDir = join(root, "executions", p.id),
@@ -463,7 +467,7 @@ export async function executeDevelopment(
       });
     const warnings =
       "Acceptance criteria are supplied by the requester; configured checks do not prove every criterion. Diff output is bounded; inspect the full PR before human review.";
-    const body = `## ${job.title}\n\nConduit job: ${job.id}\nParent task: ${job.root_job_id}\nExecution attempt: ${job.attempt_count}\nBase branch: ${job.base_branch}\nStarting commit: ${state.start}\nHead commit: ${head}\n\nImplementation: ${state.changes.summary}\n\n### Files changed (cumulative)\n${cumulative.files.map((f) => `- ${f.status}: ${f.path} (+${f.additions}/-${f.deletions})`).join("\n")}\n\n### Verification\n${state.execution.checks.map((c) => `- ${c.name}: ${c.exit_code === 0 ? "passed" : "failed"}`).join("\n")}\n\n### Warnings and limitations\n${warnings}\n\nDraft only. Human review and merge through GitHub are required.`;
+    const body = `## ${job.title}\n\nConduit job: ${job.id}\nParent task: ${job.root_job_id}\nExecution attempt: ${job.attempt_count}\nBase branch: ${job.base_branch}\nStarting commit: ${state.start}\nHead commit: ${head}\n\nImplementation: ${state.changes.summary}\n\n### Files changed (cumulative)\n${cumulative.files.map((f) => `- ${f.status}: ${f.path} (+${f.additions}/-${f.deletions})`).join("\n")}\n\n### Verification\n${state.execution.checks.map((c) => `- ${c.name}: ${c.exit_code === 0 ? "passed" : "failed"}`).join("\n")}\n\n### Warnings and limitations\n${[...githubSecurity.warnings, warnings].join("\n\n")}\n\nDraft only. Human review and merge through GitHub are required.`;
     await renew();
     const pullRequest = await github.publish(
       p,
@@ -500,7 +504,7 @@ export async function executeDevelopment(
         files_renamed: state.changes.files.filter((f) => f.status === "renamed")
           .length,
       },
-      warnings: [warnings],
+      warnings: [...githubSecurity.warnings, warnings],
     };
     return { action: "completed" as const, progress: 100, result };
   } catch (error) {
@@ -522,11 +526,7 @@ export async function executeDevelopment(
   }
 }
 export async function reconcileDevelopment(call: Call) {
-  if (
-    !process.env.CONDUIT_PROJECTS_FILE ||
-    !process.env.CONDUIT_GITHUB_TOKEN_FILE
-  )
-    return;
+  if (!process.env.CONDUIT_PROJECTS_FILE) return;
   const configs = await localProjects(),
     github = await GitHub.fromEnvironment();
   const { tasks } = await call("/api/development/pending", {});

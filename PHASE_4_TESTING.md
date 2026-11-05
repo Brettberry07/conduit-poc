@@ -37,38 +37,63 @@ CONDUIT_ADMIN_ENV_FILE=.env.schema-admin.local \
 
 For a separate local development database, use its administrator environment file and `npm run db:migrate -- --local`. The migration CLI validates the target. Apply the migration before deploying this API/worker version through the existing Vercel workflow. This implementation does not apply cloud migrations or deploy automatically.
 
-## GitHub credentials and human-only merging
+## GitHub security policies and credentials
 
-Create an existing **dedicated bot account** with repository Write access, not Maintain, Admin, organization ownership or a custom role with bypass privileges. Use a fine-grained token restricted to the explicitly approved repositories:
+Security policy is local administrator configuration, separate from the cloud registry and job payloads. No database migration is needed for this policy adjustment. Set `CONDUIT_GITHUB_SECURITY_FILE` to a private **mode-600 JSON file** before registration and worker startup. If unset, the policy is `strict_bot`. An explicit file can contain `{"policy":"strict_bot"}`. Missing/unreadable/invalid configured files fail; there is **no automatic fallback** between policies. Instinct cannot select or override a security policy.
 
-- Metadata: read.
-- Contents: read and write, for fetches and feature-branch pushes.
-- Pull requests: read and write, for creating drafts and updating their descriptions.
-- No Actions/Workflows, Administration, organization management or unrelated account permissions.
+### `strict_bot` (default)
 
-Store only the token in a private file, outside every project/worktree:
+Preserves the original requirement: the GitHub identity has ordinary Write access, no Maintain/Admin role, and no bypass of the approved base's active update-restriction ruleset. Each approved base must also require at least one approving PR review. Auto-merge must be disabled. Only repository-administrator bypass actors are supported; hidden bypass actors require the read-only audit token described below. Unsupported or unverifiable policy fails closed.
 
-```sh
-# Populate this file privately; never paste the token into a job or shared terminal log.
-chmod 600 /Users/YOU/Conduit/secrets/github-token
-export CONDUIT_GITHUB_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-token
+The publishing PAT must be fine-grained and selected-repository scoped: Metadata read, Contents read/write, Pull requests read/write. A separate bot's fine-grained PAT is **not supported by GitHub for repositories where that bot is an outside/repository collaborator**, including a personal repository owned by another user. Use this policy only with an ownership/membership arrangement supported by GitHub. It is not the practical personal-owner setup below.
+
+For strict mode, configure an active repository ruleset on every approved base with **Restrict updates**, and no bypass actors except Repository administrators (role ID 5). Require PR review and block force pushes/deletion; leave `conduit/job-*` branches outside the update restriction. The worker must not have an administrator/bypass role. Use a separate review ruleset with no bypass if human administrators should also be required to obtain an approval before merging.
+
+GitHub can hide ruleset bypass actors from a non-admin bot. If necessary, supply `CONDUIT_GITHUB_POLICY_TOKEN_FILE` pointing to a second mode-600 fine-grained PAT owned by a human administrator, with **Administration read and Metadata read only**, scoped to the selected repository. Do not grant Contents write, Pull requests write or Administration write to this audit token. Code restricts it to GET ruleset details; it is never passed to Git, Codex or verification. Missing audit visibility causes strict registration/publication to fail.
+
+### `prototype` (explicit development-only opt-in)
+
+This mode supports your existing local GitHub CLI login, a classic PAT, or a fine-grained PAT. The repository owner's identity is accepted; no bot account, rulesets, mandatory PR approvals, Administration permission or separate policy-audit token is required. Public and private repositories are supported, subject to GitHub's availability of draft PRs for that repository.
+
+Create a private `/Users/YOU/Conduit/config/github-security.json`:
+
+```json
+{
+  "policy": "prototype",
+  "acknowledge_prototype_risk": true,
+  "approved_repositories": ["YOUR_OWNER/YOUR_REPO"]
+}
 ```
 
-GitHub hides ruleset bypass actors unless the token's account can edit the ruleset. When the bot cannot read this field, create a **separate fine-grained read-only policy token**, owned by a human repository administrator, restricted to the same repositories with **Administration: read** and **Metadata: read only**. Do not grant Contents write, Pull requests write, or Administration write to that policy token. Store it privately with mode 600 and export `CONDUIT_GITHUB_POLICY_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-policy-read-token`. This token cannot push or merge with those permissions. It is used only for GET ruleset details when bypass actors are hidden; code rejects its use for other routes or mutations. Never substitute an administrator's ordinary write token. Both registration and the worker need the read-only audit token when GitHub hides the bot's bypass details.
+```sh
+chmod 600 /Users/YOU/Conduit/config/github-security.json
+export CONDUIT_GITHUB_SECURITY_FILE=/Users/YOU/Conduit/config/github-security.json
+```
 
-The worker reads this file; neither the API nor Supabase needs this token. Trusted Git operations use a temporary askpass helper and a scrubbed environment. The helper contains no token, and the token is never written into a remote URL. Codex and verification subprocesses inherit an allowlist of environment variables with no GitHub, Conduit API or database credentials. Their sandbox denies Git metadata and private configuration. Command output and Codex prose are not published as review evidence.
+Repository entries are exact `OWNER/REPO` names (case-insensitive), without wildcards. The repository must also be registered with both the cloud API and the local worker registry. Job and registration payloads cannot select the security mode. Invalid or missing configured files fail without fallback; the previous experimental `prototype_owner_token` JSON must be replaced with the configuration above.
 
-**Contents-write tokens can ordinarily merge PRs. Token scopes alone cannot enforce human-only merge.** Configure the following GitHub repository rules before registration:
+Choose either authentication method:
 
-1. Disable repository **Allow auto-merge**.
-2. Add an **active repository branch ruleset** matching each approved base branch (including the default branch).
-3. Enable **Restrict updates**, **Require a pull request before merging**, at least **one approving review**, and block force pushes and deletions. Dismiss stale approvals and require approval of the latest push where available.
-4. For the update restriction, either have no bypass actors, or permit **only Repository administrators** (GitHub repository role ID 5). The worker bot must have ordinary Write access and no administrator/bypass role. Human administrators use GitHub to review and merge. Keep those administrator credentials away from Conduit.
-5. Leave `conduit/job-*` feature branches outside the update restriction so the bot can publish there.
+1. **Existing GitHub CLI login:** run `gh auth login --hostname github.com` if needed, then `gh auth status --hostname github.com`. Leave `CONDUIT_GITHUB_TOKEN_FILE` unset. The trusted local worker calls the fixed command `gh auth token --hostname github.com` and captures the credential privately. It uses the CLI's active account and supports `GH_CONFIG_DIR` / `XDG_CONFIG_HOME`. Environment token overrides (`GH_TOKEN`, `GITHUB_TOKEN`) are deliberately not inherited by that command; use a private token file for an administrator-supplied token. Start the worker under the same OS user with access to the CLI's credential store.
+2. **Administrator token:** put only the token in a private mode-600 file outside repository/worktree directories and export `CONDUIT_GITHUB_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-token`. Classic (`ghp_`) and fine-grained (`github_pat_`) tokens are accepted. A configured token file takes precedence over CLI login; invalid, unreadable or insecure files fail without falling back to another identity. For a fine-grained PAT, select the intended repository and grant Metadata read, Contents read/write, and Pull requests read/write. Classic PATs need appropriate repository access (`repo` for private repositories, or `public_repo` for public-only use). Use a short expiry and avoid extra privileges.
 
-Registration and every publication recheck repository identity, default branch, push-only permissions, auto-merge settings, active update restrictions, visible admin-only bypass actors, and required PR approvals. Missing/inaccessible ruleset details fail closed. Team, integration, organization-role and custom bypass configurations are deliberately unsupported in this prototype. This strict configuration prevents the bot credential from updating a base branch **even after a PR has approvals**. An administrator must retain the repository policy; the worker cannot change it. GitHub plan/repository support for rulesets and private draft PRs is required. No merge API or merge code is provided.
+Use the same exports for project registration and worker startup. Restart the worker after changing policy or authentication configuration. `CONDUIT_GITHUB_POLICY_TOKEN_FILE` is ignored in prototype mode. Registration output, execution results and draft PR bodies identify the selected mode and include a credential-free risk warning.
 
-Reference: [GitHub rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets), [rules REST API](https://docs.github.com/en/rest/repos/rules), [draft PR REST API](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request).
+Prototype checks the registered repository's identity, canonical HTTPS remote, expected default branch, approved base existence, read/write access and non-archived state. It does not query branch rules or protection APIs, audit approval counts, or require repository settings changes. Existing GitHub rules still apply to pushes and PRs. Repository auto-merge availability does not block prototype mode; Conduit never enables or requests automatic merging.
+
+**Development risk:** owner credentials and broad classic/CLI tokens can retain administrative and merge permissions outside Conduit's workflow. The local allowlist restricts Conduit's requests, not a stolen token. No branch-rule audit guarantees that a compromised trusted worker cannot merge or change other branches. Human review is required before merging. Keep prototype mode local to an experimental installation; never enable it in a public deployment's defaults or embed these credentials in distributed configuration.
+
+Conduit still publishes only to independent `conduit/job-*` branches, uses ordinary fast-forward pushes, creates draft PRs, and updates the original PR for revisions. It never pushes to approved base/default branches, force-pushes, resets the existing checkout, automatically merges, or changes GitHub settings. API authentication, job ownership, verification, worktree isolation and recovery checks remain active.
+
+### Switch back to strict mode
+
+Stop the local worker, replace the local security file with `{"policy":"strict_bot"}` (or unset `CONDUIT_GITHUB_SECURITY_FILE`), configure the strict fine-grained publisher token and required repository policy described above, then restart. Strict mode does not use `gh` fallback, accept classic/CLI OAuth tokens, or relax rules when validation fails. Re-run registration validation or a development job to check the strict configuration. No cloud schema change is needed.
+
+### Credential isolation (both modes)
+
+Instinct, the API and Supabase never receive GitHub credentials. Trusted Git uses an ephemeral askpass helper and a scrubbed environment, never a credential-bearing remote URL. Codex and verification inherit an explicit environment allowlist without GitHub tokens or configuration variables. Their sandbox denies token files, GitHub CLI configuration (including custom locations), local Keychain storage, local security configuration and Git metadata. The CLI token command has fixed arguments, bounded output/time, no shell and sanitized errors; raw stdout/stderr are never logged on failure. Keep credential files outside project, dependency and worktree directories.
+
+References: [GitHub CLI token retrieval](https://cli.github.com/manual/gh_auth_token), [PAT permissions and limitations](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens), [strict rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets), [draft PR API](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request).
 
 ## Register a project locally
 
@@ -143,8 +168,7 @@ CONDUIT_API_URL=https://YOUR-PROJECT.vercel.app \
 WORKER_KEY_FILE=/ABSOLUTE/PATH/.secrets/worker.json \
 WORKER_STATE_DIR=/ABSOLUTE/PATH/.worker/hosted-phase4 \
 CONDUIT_PROJECTS_FILE=/Users/YOU/Conduit/config/projects.json \
-CONDUIT_GITHUB_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-token \
-CONDUIT_GITHUB_POLICY_TOKEN_FILE=/Users/YOU/Conduit/secrets/github-policy-read-token \
+CONDUIT_GITHUB_SECURITY_FILE=/Users/YOU/Conduit/config/github-security.json \
 CODEX_TIMEOUT_MS=180000 \
 npm run worker
 ```
@@ -251,24 +275,29 @@ Cleanup refuses active/queued work, conflicts, any uncommitted/untracked/**ignor
 
 `npm test` applies every actual migration to disposable loopback PostgreSQL, tests the existing real HTTP server/worker, and tests Phase 4 against actual temporary Git repositories and a bare local remote with mocked GitHub and Codex. It covers isolation of staged/dirty checkouts, managed clones, independent branches, added/modified/deleted/renamed/untracked files, commit/push behavior, review scopes, revisions, branch locks, changed remote refs, verification failure, publication recovery, duplicate PR prevention, dependencies and disabled projects. It never reads hosted database credentials for these tests.
 
-The live demonstration is opt-in. Create a **private, dedicated disposable repository yourself**, add topic `conduit-disposable-test`, configure the rules above, provide the registration JSON and use a token restricted to that test repository. Choose a verification profile compatible with its fixture and policy permitting the root-level probe text file. Run the new migrated API and Mac worker first. The script registers the test project locally, submits through the configured API, waits for real Codex, checks the draft PR and diffs, submits a revision, verifies the same PR receives a new commit, and checks the default SHA did not change. It never merges or creates a repository and leaves the draft/worktree for inspection.
+The disposable smoke demonstration is opt-in. Create a **dedicated disposable public or private repository** (for example `Brettberry07/conduit-phase4-test`), add topic `conduit-disposable-test`, configure the chosen local mode and authentication above, and provide registration JSON. Choose `prototype` explicitly for personal development. The repository must exactly match the explicit `CONDUIT_GITHUB_TEST_REPOSITORY` allowlist. **The smoke test always rejects `Brettberry07/conduit-poc`, even if it is later made private or given the test topic.** Choose a verification profile compatible with its fixture and policy permitting the root-level probe text file. Run the new migrated API and Mac worker first. The script registers the test project locally, submits through the configured API, waits for real Codex, checks the draft PR and diffs, submits a revision, verifies the same PR receives a new commit, and checks the default SHA did not change. It never merges or creates a repository and leaves the draft/worktree for inspection.
 
 ```sh
 export CONDUIT_RUN_GITHUB_INTEGRATION=1
-export CONDUIT_GITHUB_TEST_REPOSITORY=YOUR_OWNER/YOUR_PRIVATE_DISPOSABLE_REPO
+export CONDUIT_GITHUB_TEST_REPOSITORY=YOUR_OWNER/YOUR_DISPOSABLE_REPO
 export CONDUIT_TEST_REGISTRATION_FILE=/Users/YOU/Conduit/config/test-registration.json
 export SUBMITTER_KEY_FILE=/ABSOLUTE/PATH/.secrets/instinct.json
-# Also export CONDUIT_API_URL, CONDUIT_PROJECTS_FILE, CONDUIT_GITHUB_TOKEN_FILE, CONDUIT_GITHUB_POLICY_TOKEN_FILE,
-# and CONDUIT_ADMIN_ENV_FILE as described above. Keep the configured worker running.
+# Also export CONDUIT_API_URL, CONDUIT_PROJECTS_FILE, CONDUIT_GITHUB_SECURITY_FILE,
+# and CONDUIT_ADMIN_ENV_FILE as described above. Token-file authentication is optional in prototype mode.
+# Keep the configured worker running.
 npm run smoke:github
 ```
+
+For the initial disposable registration, use the existing registration JSON structure with a fresh fixed UUID, `repository_owner: "Brettberry07"`, `repository_name: "conduit-phase4-test"`, `default_branch: "main"`, `allowed_base_branches: ["main"]`, and managed local storage. Choose an administrator-approved verification argv such as `["/ABSOLUTE/NODE24/bin/node", "--test", "test/*.test.mjs"]` for a small dependency-free Node fixture with committed tests. Permit the root-level generated `conduit-probe-UUID.txt` via the local path policy. Do not reuse the Conduit production registration. The script registers this fixture locally before submitting the jobs.
 
 Private evidence is written to ignored `output/phase4-UUID.json`; it includes job/revision IDs, review packages, PR URL and default-before/after SHAs. A timeout/failure is not reported as success. If a creation response is ambiguous, inspect the queue before rerunning this probe; each probe is a new independent task. `npm test` skips this integration unless the explicit opt-in flag is set. Phase 3's real Codex integration remains separately opt-in.
 
 ## Validation evidence and remaining setup
 
-See the final implementation report for exact automated results. The live GitHub/Codex integration has **not been run in this implementation session**: no opt-in flag, dedicated test repository registration or worker GitHub token was configured. No hosted database or GitHub repository was changed.
+The automated suite runs the Phase 4 API/queue, actual local Git worktrees and publication/revision/recovery workflow under both `strict_bot` and `prototype`, with mocked GitHub and Codex. Authentication tests cover stored CLI login, credential-file precedence and permissions, classic/fine-grained/OAuth tokens, sanitized CLI errors, and strict audit-token behavior. Policy tests verify strict protections, prototype operation without protections, repository allowlisting and the disposable public/private guard. See `PHASE_4_IMPLEMENTATION.md` for recorded validation results and live evidence.
 
-Remaining setup: apply the reviewed migration; deploy the API using the established Vercel workflow; provision the dedicated least-privilege GitHub bot token, read-only policy-audit token and rulesets; register a project with its local policy/dependencies; rotate the Instinct key if revision scope is needed; launch the Node 24 Mac worker; run the opt-in demonstration.
+Hosted use still requires the existing Phase 4 migration and API deployment through your normal workflow; neither happens automatically. A deployed API returning 404 for `/api/projects` needs the Phase 4 release before Instinct can submit development jobs to it. Register a project with local verification/dependencies, ensure Instinct's key has `jobs:revise`, and run the Node 24 Mac worker with the local prototype configuration.
 
-Prototype limits: one active worker/Codex execution; no thread resumption; manual handling of interrupted unverified execution, conflicts and partial clones; strict admin-only ruleset policy; fine-grained dedicated-bot tokens only (no GitHub App installation/refresh flow); no sandbox network, package installation or complete Conduit network/database test suite inside verification; heuristic secret scanning; bounded stored diffs; dependency and revision listings capped at 100 without cursor pagination; PR state refresh depends on the running local worker; external Git/GitHub effects cannot be transactionally fenced with PostgreSQL, so local branch locks and head checks remain necessary. Human repository administrators can change protections and must maintain them.
+The disposable smoke guard deliberately rejects the production Conduit repository. An explicitly requested normal development job against a registered Conduit repository can use its own isolated feature branch and draft PR; do not bypass the disposable smoke guard or run destructive cleanup against it.
+
+Prototype limits: one active worker/Codex execution; fresh Codex threads; manual handling of interrupted unverified execution, conflicts and partial clones; no sandbox network/package installation or complete Conduit network/database test suite inside verification; heuristic secret scanning; bounded stored diffs; dependency/revision listings capped at 100; PR state refresh depends on the running worker. External Git/GitHub effects cannot be transactionally fenced with PostgreSQL, so local locks and head checks remain necessary.

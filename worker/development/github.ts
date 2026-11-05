@@ -1,4 +1,11 @@
-import { readFile, stat } from "node:fs/promises";
+import { branchSchema } from "../../src/lib/development";
+import {
+  githubSecuritySchema,
+  loadGitHubSecurity,
+  PROTOTYPE_WARNING,
+  type GitHubSecurity,
+} from "./github-policy";
+import { loadGitHubCredentials } from "./github-auth";
 export type Project = {
   id: string;
   name: string;
@@ -10,6 +17,13 @@ export type Project = {
   enabled: boolean;
 };
 export class Blocked extends Error {}
+class GitHubRequestError extends Error {
+  constructor(public httpStatus: number) {
+    super(
+      `GitHub request failed (${httpStatus}); verify repository permissions or retry publication`,
+    );
+  }
+}
 export type PullRequest = {
   number: number;
   url: string;
@@ -24,35 +38,24 @@ export class GitHub {
     private token: string,
     private transport: typeof fetch = fetch,
     private policyToken?: string,
+    private security: GitHubSecurity = { policy: "strict_bot" },
   ) {
-    if (!/^github_pat_[A-Za-z0-9_]+$/.test(token))
+    this.security = githubSecuritySchema.parse(security);
+    const supported =
+      this.security.policy === "strict_bot"
+        ? /^github_pat_[A-Za-z0-9_]+$/
+        : /^(?:github_pat_|gh[po]_)[A-Za-z0-9_]+$/;
+    if (!supported.test(token))
       throw Error(
-        "A fine-grained GitHub token for a dedicated write-only bot is required",
+        this.security.policy === "strict_bot"
+          ? "A fine-grained GitHub personal access token is required in strict_bot mode"
+          : "Prototype requires a GitHub CLI OAuth token, classic PAT or fine-grained PAT",
       );
   }
   static async fromEnvironment() {
-    const path = process.env.CONDUIT_GITHUB_TOKEN_FILE;
-    if (!path)
-      throw Error(
-        "Set CONDUIT_GITHUB_TOKEN_FILE to a private worker-only token file",
-      );
-    const info = await stat(path);
-    if ((info.mode & 0o077) !== 0)
-      throw Error("GitHub token file must have mode 600");
-    const auditPath = process.env.CONDUIT_GITHUB_POLICY_TOKEN_FILE;
-    let policyToken: string | undefined;
-    if (auditPath) {
-      if (((await stat(auditPath)).mode & 0o077) !== 0)
-        throw Error("Policy audit token file must have mode 600");
-      policyToken = (await readFile(auditPath, "utf8")).trim();
-      if (!/^github_pat_[A-Za-z0-9_]+$/.test(policyToken))
-        throw Error("Policy audit requires a fine-grained read-only token");
-    }
-    return new GitHub(
-      (await readFile(path, "utf8")).trim(),
-      fetch,
-      policyToken,
-    );
+    const security = await loadGitHubSecurity();
+    const { token, policyToken } = await loadGitHubCredentials(security);
+    return new GitHub(token, fetch, policyToken, security);
   }
   // Used only by trusted Git subprocesses via an ephemeral askpass program; never a remote URL.
   gitToken() {
@@ -65,11 +68,33 @@ export class GitHub {
     body?: unknown,
     policyRead = false,
   ): Promise<any> {
+    if (
+      this.security.policy === "prototype" &&
+      !this.security.approved_repositories.some(
+        (r) =>
+          r.toLowerCase() ===
+          `${project.repository_owner}/${project.repository_name}`.toLowerCase(),
+      )
+    )
+      throw new Blocked("Repository is not in the local prototype allowlist");
     if (policyRead && (method !== "GET" || !/^\/rulesets\/\d+$/.test(suffix)))
       throw Error(
         "Policy audit credentials are restricted to reading ruleset details",
       );
     const path = `/repos/${encodeURIComponent(project.repository_owner)}/${encodeURIComponent(project.repository_name)}${suffix}`;
+    return this.send(
+      path,
+      method,
+      body,
+      policyRead ? this.policyToken! : this.token,
+    );
+  }
+  private async send(
+    path: string,
+    method: string,
+    body: unknown,
+    token: string,
+  ): Promise<any> {
     let response: Response;
     try {
       response = await this.transport(`https://api.github.com${path}`, {
@@ -78,7 +103,7 @@ export class GitHub {
         signal: AbortSignal.timeout(15000),
         headers: {
           Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${policyRead ? this.policyToken : this.token}`,
+          Authorization: `Bearer ${token}`,
           "X-GitHub-Api-Version": "2026-03-10",
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -88,30 +113,64 @@ export class GitHub {
         "GitHub request failed or timed out; publication can be reconciled",
       );
     }
-    if (!response.ok)
-      throw Error(
-        `GitHub request failed (${response.status}); verify repository permissions or retry publication`,
-      );
+    if (!response.ok) throw new GitHubRequestError(response.status);
     return response.json();
   }
   async safety(project: Project, base = project.default_branch) {
+    const name = `${project.repository_owner}/${project.repository_name}`;
+    if (
+      !project.enabled ||
+      !branchSchema.safeParse(base).success ||
+      !project.allowed_base_branches.includes(base)
+    )
+      throw new Blocked("Project or configured base branch is not approved");
+    if (
+      this.security.policy === "prototype" &&
+      !this.security.approved_repositories.some(
+        (r) => r.toLowerCase() === name.toLowerCase(),
+      )
+    )
+      throw new Blocked("Repository is not in the local prototype allowlist");
     const repo = await this.request(project, "");
     if (
-      repo.full_name?.toLowerCase() !==
-        `${project.repository_owner}/${project.repository_name}`.toLowerCase() ||
+      repo.full_name?.toLowerCase() !== name.toLowerCase() ||
+      project.repository_url.toLowerCase() !==
+        `https://github.com/${name}.git`.toLowerCase() ||
       repo.default_branch !== project.default_branch ||
-      !repo.permissions?.push ||
-      repo.permissions?.admin ||
-      repo.permissions?.maintain ||
-      repo.allow_auto_merge
+      repo.permissions?.push !== true ||
+      repo.permissions?.pull === false ||
+      repo.archived === true ||
+      (this.security.policy === "strict_bot" && repo.allow_auto_merge !== false)
     )
       throw new Blocked(
-        "Repository identity, least-privilege write access, default branch or auto-merge policy is unsafe",
+        "Repository identity, write access, archive state, default branch or auto-merge policy is unsafe",
       );
+    if (
+      this.security.policy === "strict_bot" &&
+      (repo.permissions?.admin || repo.permissions?.maintain)
+    )
+      throw new Blocked(
+        "strict_bot rejects owner, admin and maintain identities",
+      );
+    if (this.security.policy === "prototype") {
+      if (repo.archived !== false || repo.permissions?.pull !== true)
+        throw new Blocked(
+          "Repository archive state and read/write permissions must be verifiable",
+        );
+      const branch = await this.request(
+        project,
+        `/branches/${encodeURIComponent(base)}`,
+      );
+      if (branch.name !== base)
+        throw new Blocked("Configured base branch is missing or mismatched");
+      return { policy: this.security.policy, warnings: [PROTOTYPE_WARNING] };
+    }
     const rules = await this.request(
       project,
       `/rules/branches/${encodeURIComponent(base)}?per_page=100`,
     );
+    if (!Array.isArray(rules) || rules.length >= 100)
+      throw new Blocked("Active branch rules could not be completely verified");
     // Strict supported policy: active repository ruleset restricts updates; only repository
     // admins (role ID 5) may bypass it. A push-only worker cannot merge, even after approval.
     const candidates = rules.filter(
@@ -147,6 +206,7 @@ export class GitHub {
       throw new Blocked(
         "Base branch requires active update restriction (admin-only bypass) and at least one human PR approval",
       );
+    return { policy: this.security.policy, warnings: [] as string[] };
   }
   normalize(raw: any): PullRequest {
     if (
@@ -191,6 +251,17 @@ export class GitHub {
     title: string,
     body: string,
   ) {
+    if (
+      !branchSchema.safeParse(branch).success ||
+      !branch.startsWith("conduit/job-") ||
+      branch === project.default_branch ||
+      project.allowed_base_branches.includes(branch)
+    )
+      throw new Blocked(
+        "Publication must use an independent Conduit feature branch",
+      );
+    if (!project.allowed_base_branches.includes(base))
+      throw new Blocked("Pull request base is not approved");
     let pr = await this.find(project, branch);
     if (!pr) {
       try {

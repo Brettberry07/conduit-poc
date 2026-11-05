@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { sandboxCommand, timeoutMs } from "../codex";
 import { type LocalProject, git, prohibited } from "./git";
 import type { ClaimedJob } from "../runner";
+import { githubCredentialPaths } from "./github-auth";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export type Check = {
   name: string;
@@ -106,10 +107,12 @@ export async function executeWorktree(
     for (const file of [
       process.env.CONDUIT_GITHUB_TOKEN_FILE,
       process.env.CONDUIT_GITHUB_POLICY_TOKEN_FILE,
+      process.env.CONDUIT_GITHUB_SECURITY_FILE,
       process.env.WORKER_KEY_FILE,
       process.env.CONDUIT_PROJECTS_FILE,
     ])
-      if (file) grants.set(await realpath(file), "deny");
+      if (file)
+        grants.set(await realpath(file).catch(() => resolve(file)), "deny");
     const tracked = (await git(workspace, ["ls-files", "-z"]))
       .split("\0")
       .filter(Boolean);
@@ -125,6 +128,8 @@ export async function executeWorktree(
       ".ssh",
     ])
       grants.set(join(workspace, p), "deny");
+    for (const path of githubCredentialPaths())
+      grants.set(await realpath(path).catch(() => path), "deny");
     const content = `default_permissions = "conduit"\napproval_policy = "never"\nallow_login_shell = false\nweb_search = "disabled"\n[permissions.conduit.filesystem]\n":minimal" = "read"\n"/tmp" = "deny"\n"/private/tmp" = "deny"\n"/var/folders" = "deny"\n"/private/var/folders" = "deny"\n${[...grants].map(([p, v]) => `${JSON.stringify(p)} = ${JSON.stringify(v)}`).join("\n")}\n[permissions.conduit.network]\nenabled = false\n`;
     await writeFile(join(auth, "config.toml"), content, { mode: 0o600 });
     const env = {
@@ -148,6 +153,7 @@ export async function executeWorktree(
         join(auth, "auth.json"),
         join(login, "auth.json"),
         join(workspace, ".git"),
+        ...githubCredentialPaths().map((path) => join(path, "hosts.yml")),
       ],
       workspace,
       env,
