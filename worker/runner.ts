@@ -3,7 +3,8 @@ import { join } from "node:path";
 export type ClaimedJob = {
   id: string;
   claim_token: string;
-  task: "simulate-development" | "simulate-failure" | "codex_task";
+  task:
+    "simulate-development" | "simulate-failure" | "codex_task" | "development";
   title?: string;
   instructions?: string;
   acceptance_criteria?: string;
@@ -15,7 +16,7 @@ type Journal = {
   job: ClaimedJob;
   attempt_dir?: string;
   outcome?: {
-    action: "completed" | "failed";
+    action: "completed" | "failed" | "blocked";
     progress: number;
     result?: Record<string, unknown>;
     error?: string;
@@ -64,7 +65,22 @@ export async function cycle(
     });
   try {
     if (!journal.outcome) {
-      if (job.task === "codex_task") {
+      if (job.task === "development") {
+        const { executeDevelopment } = await import("./development/run");
+        const { cleanupAttemptAuth } = await import("./codex");
+        if (journal.attempt_dir) await cleanupAttemptAuth(journal.attempt_dir);
+        journal.outcome = await executeDevelopment(
+          job as import("./development/run").DevelopmentJob,
+          call,
+          stateDir,
+          stopping,
+          async (attempt) => {
+            journal.attempt_dir = attempt;
+            await save(journal);
+          },
+        );
+        await save(journal);
+      } else if (job.task === "codex_task") {
         const { executeCodex, cleanupAttemptAuth } = await import("./codex");
         if (journal.attempt_dir) await cleanupAttemptAuth(journal.attempt_dir);
         journal.outcome = await executeCodex(

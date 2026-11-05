@@ -150,7 +150,7 @@ test(
       const worker = callFor("worker"),
         worker2 = callFor("worker2");
       const reset = () =>
-        pool.query("TRUNCATE orchestrator.jobs,orchestrator.workers");
+        pool.query("TRUNCATE orchestrator.jobs,orchestrator.workers CASCADE");
       await t.test(
         "authentication rejects missing, invalid, expired, revoked credentials",
         async () => {
@@ -707,7 +707,7 @@ test(
           const { rows } = await pool.query(
             `SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='orchestrator' AND c.relkind='r'`,
           );
-          assert.equal(rows.length, 3);
+          assert.equal(rows.length, 7);
           assert.ok(rows.every((r) => r.relrowsecurity));
           await pool.query("CREATE ROLE poc_untrusted NOLOGIN");
           await pool.query("GRANT poc_untrusted TO postgres");

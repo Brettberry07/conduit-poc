@@ -114,7 +114,7 @@ test(
         )
       ).rows[0];
       const applied = await applyMigrations(admin, true);
-      assert.equal(applied.length, 5);
+      assert.equal(applied.length, 6);
       assert.deepEqual(await applyMigrations(admin), []);
       assert.ok(
         (await admin.query("SELECT revoked_at FROM orchestrator.api_keys"))
@@ -124,7 +124,7 @@ test(
         (await admin.query("SELECT id FROM orchestrator.jobs")).rows[0].id,
         oldJob.id,
       );
-      await admin.query("TRUNCATE orchestrator.jobs");
+      await admin.query("TRUNCATE orchestrator.jobs CASCADE");
       const url = `postgresql://postgres:local-test-password@127.0.0.1:${dbPort}/postgres`;
       const env = {
         ...process.env,
@@ -165,7 +165,11 @@ test(
           ).rows[0];
           assert.notEqual(row.key_hash, credential.token);
           assert.equal(row.key_prefix, credential.token.slice(0, 17));
-          assert.deepEqual(row.scopes, ["jobs:create", "jobs:read"]);
+          assert.deepEqual(row.scopes, [
+            "jobs:create",
+            "jobs:read",
+            "jobs:revise",
+          ]);
           assert.ok(
             Math.abs(
               new Date(row.expires_at).getTime() - Date.now() - 30 * 86400000,

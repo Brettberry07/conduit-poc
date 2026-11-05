@@ -1,3 +1,5 @@
+import { developmentApi } from "./development-api";
+import { DevelopmentError } from "./development";
 import { authenticate, requiredScope } from "./keys";
 import { z } from "zod";
 import type { DB } from "./db";
@@ -38,21 +40,21 @@ const createJob = z
 const reportBody = z
   .object({
     claim_token: uuid,
-    action: z.enum(["progress", "completed", "failed"]),
+    action: z.enum(["progress", "completed", "failed", "blocked"]),
     progress: z.number().int().min(0).max(100).default(0),
     result: z.record(z.string(), z.unknown()).optional(),
     error: z.string().min(1).max(4000).optional(),
   })
   .strict()
   .superRefine((v, c) => {
-    if (v.action === "failed" && !v.error)
+    if (["failed", "blocked"].includes(v.action) && !v.error)
       c.addIssue({ code: "custom", message: "Failure requires error" });
     if (v.action === "completed" && !v.result)
       c.addIssue({ code: "custom", message: "Completion requires result" });
   });
 const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
-async function body(req: Request) {
+async function body(req: Request, max = 32768) {
   if (!req.headers.get("content-type")?.startsWith("application/json"))
     throw new Error("invalid-body");
   const reader = req.body?.getReader();
@@ -63,7 +65,7 @@ async function body(req: Request) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.length;
-    if (size > 32768) {
+    if (size > max) {
       await reader.cancel();
       throw new Error("invalid-body");
     }
@@ -85,8 +87,12 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     const scope = requiredScope(path, method);
     if (!scope) return json({ error: "Not found" }, 404);
     if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
+    const creationBody =
+      method === "POST" && path === "/api/jobs" ? await body(req) : undefined;
+    const development = await developmentApi(req, db, key, body, creationBody);
+    if (development) return development;
     if (method === "POST" && path === "/api/jobs") {
-      const input = createJob.parse(await body(req));
+      const input = createJob.parse(creationBody);
       const requestId = uuid.parse(req.headers.get("idempotency-key"));
       const {
         rows: [job],
@@ -189,6 +195,8 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     }
     return json({ error: "Not found" }, 404);
   } catch (e) {
+    if (e instanceof DevelopmentError)
+      return json({ error: e.message }, e.status);
     if (
       e instanceof z.ZodError ||
       (e instanceof Error && e.message === "invalid-body")

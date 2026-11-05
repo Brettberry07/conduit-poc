@@ -16,7 +16,10 @@
     "db:runtime": "tsx scripts/runtime-role.ts",
     "smoke": "tsx scripts/smoke.ts",
     "test:http": "tsx --test tests/http.test.ts",
-    "smoke:codex": "tsx scripts/codex-smoke.ts"
+    "smoke:codex": "tsx scripts/codex-smoke.ts",
+    "project": "tsx scripts/project.ts",
+    "smoke:github": "tsx scripts/github-smoke.ts",
+    "development:admin": "tsx scripts/development-admin.ts"
   },
   "keywords": [],
   "author": "",

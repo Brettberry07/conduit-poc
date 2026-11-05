@@ -44,6 +44,7 @@ const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const call = workerClient(base, credential.token);
 log("started", { worker_id: credential.principal });
 let backoff = 1000;
+let lastReconciliation = 0;
 try {
   // Bind persistent recovery state to its API origin; never send old claim tokens to another host.
   const binding = join(dir, "origin");
@@ -64,6 +65,15 @@ try {
   }
   while (!stop) {
     try {
+      if (Date.now() - lastReconciliation > 30000) {
+        const { reconcileDevelopment } = await import("./development/run");
+        try {
+          await reconcileDevelopment(call);
+        } catch {
+          log("github_reconciliation_pending");
+        }
+        lastReconciliation = Date.now();
+      }
       await cycle(call, dir, wait, () => stop);
       backoff = 1000;
       if (!stop) await wait(2000);

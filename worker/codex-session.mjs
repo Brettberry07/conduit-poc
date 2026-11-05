@@ -33,7 +33,7 @@ process.once("message", async ({ workspace, instructions, timeout }) => {
             OPENSSL_CONF: "/dev/null",
             PATH: process.env.PATH,
             HOME: workspace,
-            TMPDIR: workspace + "/.tmp",
+            TMPDIR: process.env.TMPDIR || workspace + "/.tmp",
           },
         },
         features: {

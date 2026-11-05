@@ -7,7 +7,7 @@ Instinct ──HTTPS──> Vercel Next.js API ──verified TLS──> Supabas
 Mac worker ──HTTPS──> Vercel Next.js API
 ```
 
-No Cloudflare Tunnel or local PostgreSQL is needed once deployed. No dashboard, account system, OAuth, Codex, GitHub execution or simulator support is included. `/` returns a JSON service identifier. The local checkout and package are named `conduit-poc`. The private database schema retains its original `orchestrator` name to preserve the tested SQL and existing migration history.
+No Cloudflare Tunnel or local PostgreSQL is needed once deployed. No dashboard, account system, OAuth or simulator support is included. Codex sandbox execution and registered GitHub development are described in the Phase 3 and Phase 4 sections below. `/` returns a JSON service identifier. The local checkout and package are named `conduit-poc`. The private database schema retains its original `orchestrator` name to preserve the tested SQL and existing migration history.
 
 **Hosted deployment:** [https://conduit-poc.vercel.app](https://conduit-poc.vercel.app), backed by the dedicated [Supabase Conduit project](https://supabase.com/dashboard/project/noftwqvntanjjgdchmmy). Cloud setup and deployment were approved on November 4, 2026. The Mac worker communicates with Vercel; no tunnel or local PostgreSQL is required. Existing local job data remains preserved in `.local-pg/`; it was not replayed or imported into the hosted queue. See [deployment instructions](docs/deployment.md) and [verification evidence](docs/verification.md).
 
@@ -72,7 +72,7 @@ Listing returns metadata, scopes, prefix, expiration, revocation and last-used t
 
 | Credential type | Scopes                      |
 | --------------- | --------------------------- |
-| Instinct        | `jobs:create`, `jobs:read`  |
+| Instinct (new keys) | `jobs:create`, `jobs:read`, `jobs:revise` |
 | Local worker    | `jobs:claim`, `jobs:update` |
 
 Workers receive the task in the claim response and need no general `jobs:read` permission. Every protected request validates the hash, expiry, revocation and required scope using the database. Valid authentication updates `last_used_at`; there is no stale in-memory authorization cache. In-flight requests that already authenticated may finish during revocation; subsequent requests are denied.
@@ -120,15 +120,15 @@ Create body:
 }
 ```
 
-Only `simulate-development` and `simulate-failure` are allowed. Unknown fields are rejected. Request bodies are capped at 32 KiB; title at 200 characters, description/error at 4000. No command, code, or shell task can be submitted.
+`simulate-development` and `simulate-failure` remain supported. Phase 3 adds `codex_task` for its fixed sandbox, and Phase 4 adds `development` for registered project IDs (see the phase runbooks). Unknown fields are rejected. Request bodies are capped at 32 KiB; title at 200 characters, description/error at 4000. No arbitrary command or shell task can be submitted.
 
-Job responses use `{ "job": ... }`; lists use `{ "jobs": [...] }`. Submitter responses never contain claim tokens. Status values remain `queued`, `running`, `completed`, `failed`. Errors remain 400 invalid input, 401 missing/invalid/expired/revoked key, 403 missing scope, 404 missing/unowned job/route, 409 stale claim or idempotency conflict, 500 sanitized internal error. Key-management paths do not exist.
+Job responses use `{ "job": ... }`; lists use `{ "jobs": [...] }`. Submitter responses never contain claim tokens. Legacy jobs retain `queued`, `running`, `completed`, `failed`. Phase 4 adds `waiting_dependencies`, `blocked`, and a running `phase` field. Errors remain 400 invalid input, 401 missing/invalid/expired/revoked key, 403 missing scope, 404 missing/unowned job/route, 409 stale claim or idempotency conflict, 500 sanitized internal error. Key-management paths do not exist.
 
 Use the same UUID and identical body to retry an ambiguous creation response. Timestamp pagination can skip exact timestamp ties; integrations should retain job IDs and retrieve results individually.
 
 ## Queue guarantees
 
-The queue SQL is unchanged. `FOR UPDATE SKIP LOCKED` plus a single update atomically assigns a random per-attempt token, worker identity, 30-second lease and incremented attempt count. Progress extends the lease using database time. All updates are fenced by worker ID, token and unexpired running lease. Repeated terminal acknowledgments preserve the first result. Different workers cannot hold the same unexpired claim.
+The existing lease/token fencing is preserved; Phase 4 adds dependency and branch coordination. `FOR UPDATE SKIP LOCKED` plus a single update atomically assigns a random per-attempt token, worker identity, 30-second lease and incremented attempt count. Progress extends the lease using database time. All updates are fenced by worker ID, token and unexpired running lease. Repeated terminal acknowledgments preserve the first result. Different workers cannot hold the same unexpired claim.
 
 Execution remains **at least once**, not exactly once. A paused process may resume after another worker reclaims its expired lease; stale tokens cannot overwrite the new attempt. Simulations have no external effects. After three abandoned attempts a job becomes failed on the next claim poll; there is no background sweeper. Worker availability is observational (heartbeat within 15 seconds), not a reservation.
 
@@ -138,6 +138,8 @@ Execution remains **at least once**, not exactly once. A paused process may resu
 - `20261104232105_persistent_api_keys.sql`: upgrade existing key table, retain jobs, revoke legacy credentials.
 - `20261104232106_runtime_permissions.sql`: restricted server group, job/worker RLS policies and narrow private key-authentication function.
 - `20261104233846_key_administrator_role.sql`: separate key-administrator role with API-key permissions and no job/runtime access.
+- `20261105015635_codex_tasks.sql`: Phase 3 sandbox task inputs.
+- `20261105062426_persistent_projects.sql`: Phase 4 registry, development/revision coordination, execution history, diff artifacts and revision scope.
 
 The runtime cannot access the key table directly. Its only credential operation is a private `SECURITY DEFINER` function that validates a hash and updates `last_used_at`; it has an empty search path, explicit runtime-only execution grant and no dynamic SQL. No `anon`/`authenticated` grants are added. All key-management and migration access stays with the local administrator.
 
@@ -155,3 +157,7 @@ Both checks disable caching. Use `/api/workers` with the Instinct key to check w
 ## Phase 3: real Codex execution
 
 See [PHASE_3_TESTING.md](PHASE_3_TESTING.md) for isolated TypeScript tasks, local Codex login, setup, smoke probes, failure handling, and current verification evidence. Simulation jobs remain supported.
+
+## Phase 4: registered GitHub projects and persistent worktrees
+
+See [PHASE_4_TESTING.md](PHASE_4_TESTING.md) for the additive migration, local project registration, strict human-only merge policy, credential setup, worktree execution, review/diff endpoints, same-PR revisions, recovery commands and opt-in live demonstration. Existing simulation and Phase 3 sandbox contracts remain supported. Phase 4 introduces `jobs:revise` for newly issued Instinct keys; existing keys retain their original scopes. Cloud rollout and the live GitHub/Codex demonstration require the documented manual setup.

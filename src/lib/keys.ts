@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DB } from "./db";
 export const SCOPES = [
+  "jobs:revise",
   "jobs:create",
   "jobs:read",
   "jobs:claim",
@@ -8,7 +9,7 @@ export const SCOPES = [
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 export const credentialScopes = {
-  instinct: ["jobs:create", "jobs:read"],
+  instinct: ["jobs:create", "jobs:read", "jobs:revise"],
   worker: ["jobs:claim", "jobs:update"],
 } as const;
 export const hashKey = (key: string) =>
@@ -36,6 +37,22 @@ export async function authenticate(
   return key ?? null;
 }
 export function requiredScope(path: string, method: string): Scope | null {
+  if (
+    method === "GET" &&
+    (/^\/api\/projects(?:\/[^/]+)?$/.test(path) ||
+      /^\/api\/jobs\/[^/]+\/(revisions|executions|changes|diff|publication)$/.test(
+        path,
+      ))
+  )
+    return "jobs:read";
+  if (method === "POST" && /^\/api\/jobs\/[^/]+\/revisions$/.test(path))
+    return "jobs:revise";
+  if (
+    method === "POST" &&
+    (/^\/api\/jobs\/[^/]+\/(publication|artifacts)$/.test(path) ||
+      ["/api/development/pending", "/api/development/reconcile"].includes(path))
+  )
+    return "jobs:update";
   if (method === "POST" && path === "/api/jobs") return "jobs:create";
   if (
     method === "GET" &&
