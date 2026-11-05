@@ -1,4 +1,4 @@
-Use the existing Conduit connection with its newly provisioned Phase 4 API key from your secure secret store. API origin: https://conduit-poc.vercel.app.
+Use the existing Conduit connection with its newly provisioned Phase 4 API key from your secure secret store. API origin: https://YOUR-PROJECT.vercel.app.
 
 Do not ask for or display GitHub credentials, database credentials, the worker key, or any Authorization header. GitHub authentication belongs to the local worker.
 

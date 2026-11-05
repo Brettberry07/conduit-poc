@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Project overview](../README.md)
 
-Local setup, credentials, queue semantics and worker recovery, consolidated from the original README. For registered GitHub development, use the [project/worktree runbook](../PHASE_4_TESTING.md). For hosted setup, use the [deployment runbook](deployment.md). These instructions describe operator procedures, not the current state of any private installation. The package remains `conduit-poc`; the private database schema remains `orchestrator` to preserve migration compatibility.
+Local setup, credentials, queue semantics and worker recovery, consolidated from the original README. For registered GitHub development, use the [project/worktree runbook](PHASE_4_TESTING.md). For hosted setup, use the [deployment runbook](deployment.md). These instructions describe operator procedures, not the current state of any private installation. The package remains `conduit-poc`; the private database schema remains `orchestrator` to preserve migration compatibility.
 
 ## Local setup and full verification
 
@@ -156,8 +156,8 @@ Both checks disable caching. Use `/api/workers` with the Instinct key to check w
 
 ## Phase 3: real Codex execution
 
-See [PHASE_3_TESTING.md](../PHASE_3_TESTING.md) for isolated TypeScript tasks, local Codex login, setup, smoke probes, failure handling, and current verification evidence. Simulation jobs remain supported.
+See [PHASE_3_TESTING.md](PHASE_3_TESTING.md) for isolated TypeScript tasks, local Codex login, setup, smoke probes, failure handling, and current verification evidence. Simulation jobs remain supported.
 
 ## Phase 4: registered GitHub projects and persistent worktrees
 
-See [PHASE_4_TESTING.md](../PHASE_4_TESTING.md) for the additive migration, local project registration, default `strict_bot` and explicit `prototype` modes (existing gh login or a classic/fine-grained PAT in prototype), credential setup, worktree execution, review/diff endpoints, same-PR revisions, recovery commands and opt-in live demonstration. Existing simulation and Phase 3 sandbox contracts remain supported. Phase 4 introduces `jobs:revise` for newly issued Instinct keys; existing keys retain their original scopes. Installation requires the documented manual setup. The later authorized rollout and live GitHub/Codex proof are recorded as historical evidence in [the implementation handoff](../PHASE_4_IMPLEMENTATION.md); they do not establish current readiness.
+See [PHASE_4_TESTING.md](PHASE_4_TESTING.md) for the additive migration, local project registration, default `strict_bot` and explicit `prototype` modes (existing gh login or a classic/fine-grained PAT in prototype), credential setup, worktree execution, review/diff endpoints, same-PR revisions, recovery commands and opt-in live demonstration. Existing simulation and Phase 3 sandbox contracts remain supported. Phase 4 introduces `jobs:revise` for newly issued Instinct keys; existing keys retain their original scopes. Installation requires the documented manual setup. The later authorized rollout and live GitHub/Codex proof are recorded as historical evidence in [the implementation handoff](PHASE_4_IMPLEMENTATION.md); they do not establish current readiness.

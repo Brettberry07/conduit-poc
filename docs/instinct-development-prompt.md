@@ -2,7 +2,7 @@ Conduit's worker configuration has been upgraded from the probe-only test profil
 
 Use the existing Conduit connection and its API key from your secure secret store:
 
-- API origin: https://conduit-poc.vercel.app
+- API origin: https://YOUR-PROJECT.vercel.app
 - Project ID: 888e3eae-a7db-4d55-959f-34e738466191
 - Repository: Brettberry07/conduit-poc
 

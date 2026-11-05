@@ -1,5 +1,5 @@
 Test Conduit POC using actual HTTPS requests. Base URL:
-https://conduit-poc.vercel.app
+https://YOUR-PROJECT.vercel.app
 
 Use the new saved 30-day Conduit key through secure secret injection. Never print the key, Authorization header, or credential-store contents. If secure secret injection or custom-header HTTP requests are unavailable, stop and report that limitation. Do not claim success without making the requests.
 

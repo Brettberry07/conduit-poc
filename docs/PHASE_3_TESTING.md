@@ -99,7 +99,7 @@ A repeatable probe that submits, polls, checks the outcome, and saves evidence:
 
 ```sh
 CONDUIT_API_URL=https://YOUR-PROJECT.vercel.app \
-SUBMITTER_KEY_FILE=.secrets/instinct-hosted.json \
+SUBMITTER_KEY_FILE=.secrets/<submitter-key>.json \
 npm run smoke:codex -- --scenario average
 ```
 
@@ -108,7 +108,7 @@ printed job ID; do not blindly create another job. Resume polling/assertions:
 
 ```sh
 CONDUIT_API_URL=https://YOUR-PROJECT.vercel.app \
-SUBMITTER_KEY_FILE=.secrets/instinct-hosted.json \
+SUBMITTER_KEY_FILE=.secrets/<submitter-key>.json \
 npm run smoke:codex -- --scenario average --job-id YOUR_JOB_UUID
 ```
 
@@ -166,7 +166,7 @@ With the worker running normally:
 
 ```sh
 CONDUIT_API_URL=https://YOUR-PROJECT.vercel.app \
-SUBMITTER_KEY_FILE=.secrets/instinct-hosted.json \
+SUBMITTER_KEY_FILE=.secrets/<submitter-key>.json \
 npm run smoke:codex -- --scenario failure
 ```
 
@@ -179,7 +179,7 @@ For timeout handling, stop the worker and restart it with
 
 ```sh
 CONDUIT_API_URL=https://YOUR-PROJECT.vercel.app \
-SUBMITTER_KEY_FILE=.secrets/instinct-hosted.json \
+SUBMITTER_KEY_FILE=.secrets/<submitter-key>.json \
 npm run smoke:codex -- --scenario timeout
 ```
 
@@ -236,7 +236,7 @@ Verification record, November 4–5, 2026 (America/Chicago):
   workspaces; stale credentials were removed.
 - Hosted Supabase migration applied and its new constraints queried successfully.
 - Hosted API deployment: `dpl_Ds7DNgTCKLuGpkS4crMHVBM34qRy` is READY at
-  `https://conduit-poc.vercel.app`, using the existing Supabase runtime connection.
+  `https://YOUR-PROJECT.vercel.app`, using the existing Supabase runtime connection.
 - Hosted average task `0638ba96-f9d3-4de1-babf-763b4a9ad8ca`: completed on
   `mac-worker`, attempt 1. Source and test files changed; TypeScript exit 0;
   four unit tests passed. The authenticated API returned the stored result.
