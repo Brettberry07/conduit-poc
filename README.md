@@ -1,6 +1,6 @@
 # Conduit
 
-[![Live](https://img.shields.io/website?url=https%3A%2F%2Fconduit-poc.vercel.app&label=live&logo=vercel)](https://conduit-poc.vercel.app) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?logo=typescript&logoColor=white) ![tests: node:test · offline](https://img.shields.io/badge/tests-node%3Atest%20%C2%B7%20offline-gray) ![License: ISC](https://img.shields.io/badge/license-ISC-blue)
+[![Live](https://img.shields.io/website?url=https%3A%2F%2Fconduit-poc.vercel.app&label=live&logo=vercel)](https://conduit-poc.vercel.app) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?logo=typescript&logoColor=white) ![tests: node:test · offline](https://img.shields.io/badge/tests-node%3Atest%20%C2%B7%20offline-gray) ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
 **From a development request to a reviewable draft pull request.**
 
@@ -19,12 +19,6 @@ The API coordinates the work; your local machine executes it. Each development t
 ![Active workers view (desktop) - fixture data](docs/screenshots/desktop-active.png)
 
 ![Needs-you queue (desktop) - fixture data](docs/screenshots/desktop-needsyou.png)
-
-Mobile layout:
-
-![Conduit job board (mobile) - fixture data](docs/screenshots/mobile-board.png)
-
-![Needs-you queue (mobile) - fixture data](docs/screenshots/mobile-needsyou.png)
 
 ## What it can do
 
@@ -97,11 +91,11 @@ npm run worker
 
 Use `http://127.0.0.1:3000` for loopback development. Keep the state directory across restarts and use a separate one for each queue/worker identity. Credentials stay in private local files.
 
-Prove the queue/worker loop with the [smoke and recovery checks](docs/manual-test.md). To execute repository tasks, complete [project registration, GitHub policy, Codex setup and verification configuration](PHASE_4_TESTING.md) first; a queue-only installation cannot publish development PRs.
+Prove the queue/worker loop with the [smoke and recovery checks](docs/manual-test.md). To execute repository tasks, complete [project registration, GitHub policy, Codex setup and verification configuration](docs/PHASE_4_TESTING.md) first; a queue-only installation cannot publish development PRs.
 
 ## API at a glance
 
-All `/api/*` routes require scoped bearer authentication. The [API and queue guide](docs/operator-guide.md#api-contract) covers payloads, errors and lease behavior; the [development runbook](PHASE_4_TESTING.md) adds projects, revisions, artifacts and publication.
+All `/api/*` routes require scoped bearer authentication. The [API and queue guide](docs/operator-guide.md#api-contract) covers payloads, errors and lease behavior; the [development runbook](docs/PHASE_4_TESTING.md) adds projects, revisions, artifacts and publication.
 
 | Route                          | Purpose                            |
 | ------------------------------ | ---------------------------------- |
@@ -120,7 +114,7 @@ Conduit is an engineering prototype with explicit operator responsibilities:
 
 - **At-least-once execution.** Lease fencing rejects stale reports and journals support recovery, but idempotent submission does not make execution exactly once. Interrupted edits, conflicts and stale locks can require manual recovery.
 - **Local trust boundary.** The administrator controls registration, workspace permissions, credentials and verification. Jobs cannot widen that policy. Sandbox isolation and heuristic secret detection do not constitute a security audit.
-- **Credential limits.** `strict_bot` is the default GitHub policy and audits required repository restrictions. Explicit `prototype` mode can use an existing GitHub login or PAT with merge/admin capabilities. See [policy and credential requirements](PHASE_4_TESTING.md#github-security-policies-and-credentials).
+- **Credential limits.** `strict_bot` is the default GitHub policy and audits required repository restrictions. Explicit `prototype` mode can use an existing GitHub login or PAT with merge/admin capabilities. See [policy and credential requirements](docs/PHASE_4_TESTING.md#github-security-policies-and-credentials).
 - **Private configuration.** Submitter/worker keys are scoped and revocable; the database stores their hashes. Runtime, key-management and schema-administrator access are separate. Keep environment files, keys, journals and private project configuration out of commits and shared logs.
 - **Human control.** No automatic merge, draft-to-ready transition, deployment or destructive worktree cleanup. Review repository protections and connected deployment triggers before merging.
 
