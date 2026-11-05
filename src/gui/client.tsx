@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { authRequest, connectEmail, readApi, sessionClient } from "./auth";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
@@ -34,33 +35,6 @@ const routes = [
 ];
 function message(e: unknown) {
   return e instanceof Error ? e.message : "Connection unavailable";
-}
-async function read(path: string, key: string, signal: AbortSignal) {
-  if (
-    !/^\/api\/(workers|jobs(?:\?[^#]*)?|jobs\/[a-zA-Z0-9-]+\/(executions|changes|publication))$/.test(
-      path,
-    )
-  )
-    throw Error("Unsupported read");
-  const r = await fetch(path, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${key}` },
-    cache: "no-store",
-    credentials: "omit",
-    redirect: "error",
-    signal,
-  });
-  if (!r.ok)
-    throw Error(
-      r.status === 401
-        ? "Key not recognized. Connect with a valid read-only Instinct key."
-        : r.status === 403
-          ? "This key needs jobs:read permission."
-          : r.status === 404
-            ? "Not available for this job"
-            : `Service unavailable (${r.status})`,
-    );
-  return r.json();
 }
 function Modal({
   children,
@@ -97,10 +71,52 @@ function Modal({
   );
 }
 export function Shell({ children }: { children: React.ReactNode }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [account, setAccount] = useState(false);
+  const auth = useRef<ReturnType<typeof sessionClient> | null>(null);
   const [key, setKey] = useState(""),
     [draft, setDraft] = useState(""),
     [connecting, setConnecting] = useState(false),
     [connectError, setConnectError] = useState("");
+  if (!auth.current)
+    auth.current = sessionClient((session) => {
+      setAccount(!!session);
+      setKey(session?.access_token ?? "");
+      setJobs([]);
+      setWorkers([]);
+      setDetails({});
+      setSelected(null);
+      setUpdated(0);
+      setError("");
+    });
+  const read = (path: string, token: string, signal: AbortSignal) =>
+    readApi(path, token, signal, (path, init, token) =>
+      /^cnd_live_/.test(token)
+        ? fetch(path, init)
+        : auth.current!.fetch(path, init, token),
+    );
+  useEffect(() => {
+    if (authRequest("password", {})) auth.current!.restore();
+  }, []);
+  async function emailConnect(action: "password" | "signup") {
+    setConnecting(true);
+    setConnectError("");
+    try {
+      const result = await connectEmail(
+        action,
+        email,
+        password,
+        auth.current!.save,
+      );
+      setConnectError(result);
+      if (!result) setPassword("");
+    } catch (e) {
+      setConnectError(message(e));
+    } finally {
+      setConnecting(false);
+    }
+  }
   const [jobs, setJobs] = useState<Job[]>([]),
     [workers, setWorkers] = useState<Worker[]>([]),
     [details, setDetails] = useState<Record<string, Detail>>({}),
@@ -220,7 +236,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
           );
         }
       } catch (e) {
-        if (!stopped && !controller.signal.aborted) setError(message(e));
+        if (!stopped && !controller.signal.aborted) {
+          setError(message(e));
+          if (
+            message(e) ===
+            "This account isn't linked to any Conduit workspace yet."
+          ) {
+            setJobs([]);
+            setWorkers([]);
+            setDetails({});
+            setSelected(null);
+            setUpdated(0);
+          }
+        }
       } finally {
         busy = false;
         if (!stopped) setLoading(false);
@@ -327,7 +355,23 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {workers.filter((w) => w.available && !stale(w, now)).length}{" "}
               workers available
             </p>
-            {key && <button onClick={disconnect}>Disconnect</button>}
+            {key && (
+              <button
+                onClick={() =>
+                  account
+                    ? void auth
+                        .current!.logout()
+                        .catch(() =>
+                          setConnectError(
+                            "Signed out locally; remote logout failed.",
+                          ),
+                        )
+                    : disconnect()
+                }
+              >
+                {account ? "Sign out" : "Disconnect"}
+              </button>
+            )}
           </div>
           <footer>
             ⌘ / Ctrl K · Jump
@@ -340,6 +384,57 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <span className="mark">↗</span>
               <p className="eyebrow">YOUR WORK, IN VIEW</p>
               <h1>Connect to Conduit</h1>
+              {authRequest("password", {}) ? (
+                <>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void emailConnect("password");
+                    }}
+                  >
+                    <label htmlFor="email">Email</label>
+                    <input
+                      id="email"
+                      type="email"
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                    />
+                    <label htmlFor="password">Password</label>
+                    <input
+                      id="password"
+                      type="password"
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                    <button disabled={connecting}>Sign in</button>
+                    <button
+                      disabled={connecting}
+                      type="submit"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (e.currentTarget.form?.reportValidity())
+                          void emailConnect("signup");
+                      }}
+                    >
+                      Sign up
+                    </button>
+                  </form>
+                  <p>
+                    Email sessions persist in localStorage across refreshes.
+                    Workspace access requires an administrator to link your
+                    account. Or paste a memory-only read-only key below.
+                  </p>
+                </>
+              ) : (
+                <p>
+                  Email sign-in is not configured. Connect using a read-only
+                  key.
+                </p>
+              )}
               <p>
                 A quiet place to follow jobs, workers, and the decisions waiting
                 for you.
@@ -425,6 +520,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         )}
         {selected && key && (
           <JobDetail
+            read={read}
             job={jobs.find((j) => j.id === selected.id) ?? selected}
             apiKey={key}
             close={() => setSelected(null)}
@@ -721,10 +817,12 @@ function JobDetail({
   job,
   apiKey,
   close,
+  read,
 }: {
   job: Job;
   apiKey: string;
   close: () => void;
+  read: (path: string, token: string, signal: AbortSignal) => Promise<any>;
 }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   useEffect(() => {

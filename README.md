@@ -78,6 +78,13 @@ The full suite starts disposable loopback PostgreSQL clusters, a real HTTP API a
 
 ### 3. Connect a worker
 
+| Credential                   | Access                                                                   | Browser storage                          |
+| ---------------------------- | ------------------------------------------------------------------------ | ---------------------------------------- |
+| `cnd_live_` API key          | Existing assigned principal and scopes                                   | GUI viewer key: React memory only        |
+| Supabase Auth email/password | Exactly `jobs:read`, only after explicit admin UUID-to-principal mapping | Session in localStorage across refreshes |
+
+See [console authentication and storage risks](docs/gui.md) and [account administration](docs/operator-guide.md#supabase-auth-account-links). Supabase Auth does not change worker authentication or `/auth-check`.
+
 For GUI access, use `npm run key -- create --type viewer --principal ID --name NAME` with the job owner's principal. This key has only `jobs:read` and cannot create, revise, claim, or update jobs. Paste it into Connect; the GUI holds it in React memory only.
 
 Issue separate submitter and worker keys through the [local key-management CLI](docs/operator-guide.md#persistent-api-keys), then start the worker against your API:
@@ -118,7 +125,7 @@ Conduit is an engineering prototype with explicit operator responsibilities:
 - **Private configuration.** Submitter/worker keys are scoped and revocable; the database stores their hashes. Runtime, key-management and schema-administrator access are separate. Keep environment files, keys, journals and private project configuration out of commits and shared logs.
 - **Human control.** No automatic merge, draft-to-ready transition, deployment or destructive worktree cleanup. Review repository protections and connected deployment triggers before merging.
 
-There is no dashboard, account system or OAuth flow. Hosted readiness, external Instinct acceptance and live Codex/GitHub verification must be established for each installation; historical results are not current guarantees.
+The read-only web console supports API keys and Supabase Auth email/password accounts with explicit administrator workspace mappings. Hosted readiness, external Instinct acceptance and live Codex/GitHub verification must be established for each installation; historical results are not current guarantees.
 
 ## Repository map
 
