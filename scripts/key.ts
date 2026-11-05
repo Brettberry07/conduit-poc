@@ -4,8 +4,9 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { adminDatabase } from "./admin";
 import { credentialScopes, generateKey } from "../src/lib/keys";
+import { createKeyOptions, credentialRoles } from "./key-options";
 const usage =
-  "Usage: npm run key -- create --type instinct|worker --principal ID --name NAME [--days 30] [--out .secrets/key.json] | list | revoke KEY_UUID";
+  "Usage: npm run key -- create --type instinct|worker|viewer --principal ID --name NAME [--days 30] [--out .secrets/key.json] | list | revoke KEY_UUID";
 async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -19,23 +20,9 @@ async function main() {
   });
   const command = positionals[0];
   if (!["create", "list", "revoke"].includes(command)) throw Error(usage);
-  let input:
-    | {
-        type: "instinct" | "worker";
-        principal: string;
-        name: string;
-        days: number;
-      }
-    | undefined;
+  let input: z.infer<typeof createKeyOptions> | undefined;
   if (command === "create") {
-    input = z
-      .object({
-        type: z.enum(["instinct", "worker"]),
-        principal: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
-        name: z.string().trim().min(1).max(120),
-        days: z.coerce.number().int().min(1).max(3650),
-      })
-      .parse(values);
+    input = createKeyOptions.parse(values);
     if (!values.out && !process.stdout.isTTY)
       throw Error(
         "Use --out .secrets/key.json for noninteractive generation; plaintext is displayed only in an interactive terminal",
@@ -73,7 +60,7 @@ async function main() {
       [
         hash,
         principal,
-        type === "instinct" ? "submitter" : "worker",
+        credentialRoles[type],
         name,
         prefix,
         [...credentialScopes[type]],
@@ -84,7 +71,7 @@ async function main() {
       token,
       id: key.id,
       principal,
-      role: type === "instinct" ? "submitter" : "worker",
+      role: credentialRoles[type],
       scopes: credentialScopes[type],
       expires_at: key.expires_at,
     };

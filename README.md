@@ -66,6 +66,8 @@ The full suite starts disposable loopback PostgreSQL clusters, a real HTTP API a
 
 ### 3. Connect a worker
 
+For GUI access, use `npm run key -- create --type viewer --principal ID --name NAME` with the job owner's principal. This key has only `jobs:read` and cannot create, revise, claim, or update jobs. Paste it into Connect; the GUI holds it in React memory only.
+
 Issue separate submitter and worker keys through the [local key-management CLI](docs/operator-guide.md#persistent-api-keys), then start the worker against your API:
 
 ```sh

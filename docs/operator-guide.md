@@ -50,6 +50,14 @@ Create a separate worker key:
 npm run key -- create --type worker --principal mac-worker --name "MacBook worker" --out .secrets/worker.json
 ```
 
+Create a read-only viewer key for `/app/board`, `/app/active`, and `/app/needs-you`, using the same principal as the job owner:
+
+```sh
+npm run key -- create --type viewer --principal ID --name NAME
+```
+
+Viewer keys have exactly `jobs:read` and role `submitter`. They permit GET requests for jobs, workers, job detail, revisions, executions, changes, diff, and publication. They cannot create, revise, claim, or update jobs. Paste the key into Connect; the GUI holds it in React memory only and loses it on refresh, disconnect, or closing the page.
+
 To display a key **once in an interactive terminal instead**, omit `--out`. Do not capture that terminal in chat, screenshots, recordings or shared logs. Noninteractive creation requires `--out`; files use mode 600 and are never overwritten. The database stores only a SHA-256 hash of 256 random bits, plus an identification prefix. Full credentials start with `cnd_live_`. There is no API or CLI operation to retrieve their plaintext later.
 
 Expiration defaults to 30 days; use `--days 60` (integer 1–3650) to customize it. Keys survive worker/API restarts and deployments, until expiration or explicit revocation. There is no hourly token refresh.
@@ -65,6 +73,7 @@ Listing returns metadata, scopes, prefix, expiration, revocation and last-used t
 | ------------------- | ----------------------------------------- |
 | Instinct (new keys) | `jobs:create`, `jobs:read`, `jobs:revise` |
 | Local worker        | `jobs:claim`, `jobs:update`               |
+| Viewer              | `jobs:read`                               |
 
 Workers receive the task in the claim response and need no general `jobs:read` permission. Every protected request validates the hash, expiry, revocation and required scope using the database. Valid authentication updates `last_used_at`; there is no stale in-memory authorization cache. In-flight requests that already authenticated may finish during revocation; subsequent requests are denied.
 
