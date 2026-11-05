@@ -11,6 +11,7 @@ export type Scope = (typeof SCOPES)[number];
 export const credentialScopes = {
   instinct: ["jobs:create", "jobs:read", "jobs:revise"],
   worker: ["jobs:claim", "jobs:update"],
+  viewer: ["jobs:read"],
 } as const;
 export const hashKey = (key: string) =>
   createHash("sha256").update(key).digest("hex");
