@@ -1,6 +1,6 @@
 # Conduit
 
-[![Deploy](https://img.shields.io/github/deployments/Brettberry07/conduit-poc/production?label=deploy&logo=vercel)](https://conduit-poc.vercel.app) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?logo=typescript&logoColor=white) ![tests: node:test · offline](https://img.shields.io/badge/tests-node%3Atest%20%C2%B7%20offline-gray) ![License: ISC](https://img.shields.io/badge/license-ISC-blue)
+[![Live](https://img.shields.io/website?url=https%3A%2F%2Fconduit-poc.vercel.app&label=live&logo=vercel)](https://conduit-poc.vercel.app) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?logo=typescript&logoColor=white) ![tests: node:test · offline](https://img.shields.io/badge/tests-node%3Atest%20%C2%B7%20offline-gray) ![License: ISC](https://img.shields.io/badge/license-ISC-blue)
 
 **From a development request to a reviewable draft pull request.**
 
