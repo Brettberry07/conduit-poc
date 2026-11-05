@@ -166,6 +166,10 @@ policyTest(
             `execution ${executions}\n`,
           );
           await writeFile(join(workspace, "new.txt"), `new ${executions}\n`);
+          await writeFile(
+            join(workspace, "asset.bin"),
+            Buffer.from([0, 0xff, executions]),
+          );
           return {
             thread_id: "test-thread",
             checks: [
@@ -306,7 +310,14 @@ policyTest(
           const changes = await (
             await req(`/api/jobs/${root.id}/changes`)
           ).json();
-          assert.equal(changes.files.length, 2);
+          assert.equal(changes.files.length, 3);
+          assert.equal(
+            changes.files.find(
+              (file: { path: string }) => file.path === "asset.bin",
+            )?.binary,
+            true,
+          );
+          assert.match(fake.pr.body, /asset.bin/);
           const diff = await (
             await req(`/api/jobs/${root.id}/diff?limit=16`)
           ).json();

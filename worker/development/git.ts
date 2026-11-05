@@ -114,6 +114,7 @@ export async function git(
   token?: string,
   allowLocal = false,
   extraEnv: Record<string, string | undefined> = {},
+  maxOutputBytes = 4 * 1024 * 1024,
 ): Promise<string> {
   let authDir: string | undefined;
   try {
@@ -160,7 +161,7 @@ export async function git(
       }, 60000);
       child.stdout.on("data", (b: Buffer) => {
         output = Buffer.concat([output, b]);
-        if (output.length > 4 * 1024 * 1024) {
+        if (output.length > maxOutputBytes) {
           failed = true;
           child.kill("SIGKILL");
         }

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, permitted, obviousSecret, type LocalProject } from "./git";
 import { Blocked } from "./github";
+const MAX_TEXT_BYTES = 256 * 1024;
+const MAX_BINARY_BYTES = 10 * 1024 * 1024;
 export type ChangedFile = {
   path: string;
   old_path?: string;
@@ -63,10 +65,12 @@ export async function captureChanges(
         );
         if (
           info &&
-          (!info.isFile() || info.isSymbolicLink() || info.size > 256 * 1024)
+          (!info.isFile() ||
+            info.isSymbolicLink() ||
+            info.size > MAX_BINARY_BYTES)
         )
           throw new Blocked(
-            "Changed file is a symlink, binary candidate, or oversized; contents withheld",
+            "Changed file is not a regular file or exceeds the 10 MiB limit; contents withheld",
           );
       }
       await git(worktree, ["read-tree", start], undefined, false, env);
@@ -111,6 +115,7 @@ export async function captureChanges(
       )
         throw new Blocked("Change violates workspace policy; diff withheld");
       if (files.length >= 100) throw new Blocked("Change limit exceeded");
+      let binary = false;
       // Scan both old and new blobs, including deleted files. Never return secret-bearing diffs.
       for (const [ref, name] of [
         [start, old_path ?? path],
@@ -130,11 +135,24 @@ export async function captureChanges(
         const size = Number(
           (await git(worktree, ["cat-file", "-s", object])).trim(),
         );
-        if (size > 256 * 1024)
+        if (size > MAX_BINARY_BYTES)
           throw new Blocked("Changed blob exceeds size limit; diff withheld");
-        const content = await git(worktree, ["cat-file", "blob", object]);
-        if (/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(content))
-          throw new Blocked("Binary changes require manual handling");
+        // Decode only for classification and secret scanning. Git retains the original
+        // blob bytes in the captured tree and commit; binary payloads never enter diffs.
+        const content = await git(
+          worktree,
+          ["cat-file", "blob", object],
+          undefined,
+          false,
+          {},
+          MAX_BINARY_BYTES,
+        );
+        const binaryBlob = /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(content);
+        binary ||= binaryBlob;
+        if (!binaryBlob && size > MAX_TEXT_BYTES)
+          throw new Blocked(
+            "Changed text blob exceeds size limit; diff withheld",
+          );
         if (obviousSecret(content))
           throw new Blocked(
             "Potential secret in changed content; diff and publication withheld",
@@ -157,19 +175,20 @@ export async function captureChanges(
         .split("\n")
         .filter(Boolean)
         .map((s) => s.split("\t"));
-      if (stats.some((s) => s[0] === "-" || s[1] === "-"))
-        throw new Blocked("Binary changes require manual handling");
-      let patch = await git(worktree, [
-        "--literal-pathspecs",
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--find-renames",
-        start,
-        tree,
-        "--",
-        ...paths,
-      ]);
+      binary ||= stats.some((s) => s[0] === "-" || s[1] === "-");
+      let patch = binary
+        ? `Binary file changed: ${JSON.stringify(path)}${old_path ? ` (from ${JSON.stringify(old_path)})` : ""}; contents omitted.\n`
+        : await git(worktree, [
+            "--literal-pathspecs",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+            start,
+            tree,
+            "--",
+            ...paths,
+          ]);
       if (obviousSecret(patch))
         throw new Blocked("Potential secret in diff; publication withheld");
       const room = Math.max(0, 128000 - Buffer.byteLength(diff)),
@@ -192,8 +211,13 @@ export async function captureChanges(
               T: "type_changed",
             } as const
           )[code[0] as "A"] ?? "modified",
-        additions: stats.reduce((n, s) => n + (Number(s[0]) || 0), 0),
-        deletions: stats.reduce((n, s) => n + (Number(s[1]) || 0), 0),
+        additions: binary
+          ? 0
+          : stats.reduce((n, s) => n + (Number(s[0]) || 0), 0),
+        deletions: binary
+          ? 0
+          : stats.reduce((n, s) => n + (Number(s[1]) || 0), 0),
+        ...(binary ? { binary: true } : {}),
         ...(truncated ? { diff_truncated: true } : {}),
       });
     }

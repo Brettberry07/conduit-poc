@@ -32,8 +32,10 @@ process.once("message", async ({ workspace, instructions, timeout }) => {
           set: {
             OPENSSL_CONF: "/dev/null",
             PATH: process.env.PATH,
-            HOME: workspace,
+            // Keep tool preferences and caches out of the publishable worktree.
+            HOME: process.env.TMPDIR || workspace,
             TMPDIR: process.env.TMPDIR || workspace + "/.tmp",
+            PYTHONDONTWRITEBYTECODE: "1",
           },
         },
         features: {

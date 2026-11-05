@@ -306,10 +306,86 @@ test("worktrees preserve dirty checkout, detect actual changes including renames
     await rm(f.dir, { recursive: true, force: true });
   }
 });
+test("binary assets survive capture, commit, push and cumulative review byte for byte", async () => {
+  const f = await fixture();
+  try {
+    const workspace = join(f.dir, "binary"),
+      branch = featureBranch(randomUUID(), "binary assets");
+    await createWorktree(f.repo, workspace, branch, f.start);
+    const payload = Buffer.alloc(5 * 1024 * 1024, 0xff);
+    payload[0] = 0;
+    for (const name of ["modified.bin", "deleted.bin", "rename.bin"])
+      await writeFile(join(workspace, name), payload);
+    // Attributes forcing text must not expose binary payloads in review diffs.
+    await writeFile(join(workspace, ".gitattributes"), "*.bin diff\n");
+    const first = await captureChanges(workspace, f.start, f.config.policy);
+    assert.equal(first.files.filter((file) => file.binary).length, 3);
+    assert.equal(first.diff.includes("\ufffd"), false);
+    assert.match(first.diff, /contents omitted/);
+    const head = await commitChanges(
+      workspace,
+      branch,
+      f.start,
+      first,
+      "Add binary assets",
+    );
+    const originalBlob = (
+      await git(workspace, ["hash-object", "modified.bin"])
+    ).trim();
+    assert.equal(
+      (await git(workspace, ["rev-parse", `${head}:modified.bin`])).trim(),
+      originalBlob,
+    );
+    payload[1] = 0x42;
+    await writeFile(join(workspace, "modified.bin"), payload);
+    await rm(join(workspace, "deleted.bin"));
+    await rename(join(workspace, "rename.bin"), join(workspace, "renamed.bin"));
+    await writeFile(join(workspace, "added.bin"), Buffer.from([0, 0xfe, 0xff]));
+    const next = await captureChanges(workspace, head, f.config.policy);
+    assert.deepEqual(
+      new Set(next.files.map((file) => file.status)),
+      new Set(["added", "modified", "deleted", "renamed"]),
+    );
+    assert.ok(
+      next.files.every(
+        (file) => file.binary && file.additions === 0 && file.deletions === 0,
+      ),
+    );
+    const final = await commitChanges(
+      workspace,
+      branch,
+      head,
+      next,
+      "Update binary assets",
+    );
+    await safePush(f.repo, f.remote, branch, final, null, undefined, true);
+    assert.equal(
+      (await git(f.remote, ["rev-parse", `${final}:modified.bin`])).trim(),
+      (await git(workspace, ["hash-object", "modified.bin"])).trim(),
+    );
+    const cumulative = await captureChanges(
+      workspace,
+      f.start,
+      f.config.policy,
+      final,
+    );
+    assert.equal(cumulative.files.filter((file) => file.binary).length, 3);
+    assert.equal((await git(workspace, ["status", "--porcelain"])).trim(), "");
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
 test("secret, symlink and oversized changes never become review artifacts or commits", async () => {
   const f = await fixture();
   try {
-    for (const kind of ["secret", "symlink", "oversized", "prohibited"]) {
+    for (const kind of [
+      "secret",
+      "binary-secret",
+      "symlink",
+      "oversized",
+      "binary-oversized",
+      "prohibited",
+    ]) {
       const workspace = join(f.dir, kind);
       await createWorktree(
         f.repo,
@@ -326,6 +402,16 @@ test("secret, symlink and oversized changes never become review artifacts or com
         await symlink("/etc/passwd", join(workspace, "bad.txt"));
       if (kind === "oversized")
         await writeFile(join(workspace, "bad.txt"), "a".repeat(300000));
+      if (kind === "binary-secret")
+        await writeFile(
+          join(workspace, "bad.bin"),
+          Buffer.from("\0github_pat_" + "z".repeat(40)),
+        );
+      if (kind === "binary-oversized")
+        await writeFile(
+          join(workspace, "bad.bin"),
+          Buffer.alloc(10 * 1024 * 1024 + 1),
+        );
       if (kind === "prohibited")
         await writeFile(join(workspace, ".env"), "TEST=value");
       await assert.rejects(
