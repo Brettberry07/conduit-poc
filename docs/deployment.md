@@ -2,17 +2,17 @@
 
 **Current deployment (Phase 4 enabled November 5, 2026):**
 
-- API: [https://conduit-poc.vercel.app](https://conduit-poc.vercel.app).
-- Vercel project: `prj_hJEeIrQwueIgVsyQcBkQDmg0ulDL`; production deployment `dpl_AKTULmzcVJczkWGb8YkkF64chNyr`, commit `406557e443cd1175963b9434b6ecef3da2361eb4`, Node 24.
-- Supabase: [conduit-poc](https://supabase.com/dashboard/project/noftwqvntanjjgdchmmy), project ref `noftwqvntanjjgdchmmy`. The Phase 4 migration and matching local-runner checksum are installed. New tables have RLS enabled; the runtime can read projects but cannot register them.
+- API: [https://YOUR-PROJECT.vercel.app](https://YOUR-PROJECT.vercel.app).
+- Vercel project: `<VERCEL-PROJECT-ID>`; production deployment `dpl_AKTULmzcVJczkWGb8YkkF64chNyr`, commit `406557e443cd1175963b9434b6ecef3da2361eb4`, Node 24.
+- Supabase: [conduit-poc](https://supabase.com/dashboard/project/<SUPABASE-PROJECT-REF>), project ref `<SUPABASE-PROJECT-REF>`. The Phase 4 migration and matching local-runner checksum are installed. New tables have RLS enabled; the runtime can read projects but cannot register them.
 - Registered project: `888e3eae-a7db-4d55-959f-34e738466191`, `Brettberry07/conduit-poc`.
-- Mac worker: running with explicit local prototype configuration in `/Users/brettberry/.conduit/hosted`, existing `gh auth`, official Node 24 and the retained `.worker/hosted-mac-worker` journal.
-- Phase 4 Instinct key delivery: `.secrets/instinct-phase4.json`, with `jobs:create`, `jobs:read`, `jobs:revise`, same `instinct` principal, expires December 5, 2026. The older `.secrets/instinct-hosted.json` remains active until replacement is verified in Instinct.
+- Mac worker: running with explicit local prototype configuration in `/Users/YOU/.conduit/hosted`, existing `gh auth`, official Node 24 and the retained `.worker/hosted-mac-worker` journal.
+- Phase 4 Instinct key delivery: `.secrets/<phase4-key>.json`, with `jobs:create`, `jobs:read`, `jobs:revise`, same `instinct` principal, expires December 5, 2026. The older `.secrets/<submitter-key>.json` remains active until replacement is verified in Instinct.
 - Worker key delivery remains `.secrets/worker-hosted.json`. GitHub credentials stay local; none were added to Vercel or API payloads.
 
 Verified: authenticated `/api/projects` returns 200 with the registered project; anonymous access returns 401; the new key retains historical job access and passes revision authorization; hosted readiness simulation `7988bf84-d652-430b-bcb9-920cb83a1512` completed on `mac-worker`. The actual GitHub/Codex draft-PR and same-PR revision proof ran through the local API earlier; Instinct's own hosted development test remains the external acceptance gate.
 
-Use [the prepared Phase 4 prompt](instinct-phase4-test-prompt.md). Run `/Users/brettberry/.conduit/hosted/copy-instinct-key.sh` locally and paste the copied API key only into Instinct's secure secret field before sending that prompt. The worker now permits normal repository-wide source, test, documentation and configuration edits (`allowed_paths: ["*"]`, no administrator read-only source paths). Verification runs route-type generation, TypeScript checking and offline unit tests with existing dependencies. Use [the development handoff](instinct-development-prompt.md) for /info and subsequent tasks. Keep the Mac awake; no new auto-restart service was installed.
+Use [the prepared Phase 4 prompt](instinct-phase4-test-prompt.md). Run `/Users/YOU/.conduit/hosted/copy-api-key.sh` locally and paste the copied API key only into Instinct's secure secret field before sending that prompt. The worker now permits normal repository-wide source, test, documentation and configuration edits (`allowed_paths: ["*"]`, no administrator read-only source paths). Verification runs route-type generation, TypeScript checking and offline unit tests with existing dependencies. Use [the development handoff](instinct-development-prompt.md) for /info and subsequent tasks. Keep the Mac awake; no new auto-restart service was installed.
 
 The authorized rollout used the authenticated Supabase connector for schema/registration and Vercel connector for deployment. No administrator password was reset, GitHub settings changed, automatic Git deployment configured, or new infrastructure created. The steps below describe a **new installation**; do not recreate this existing project's database roles/resources.
 
