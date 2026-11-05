@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { jwtVerifier, authenticateConsole } from "../src/lib/auth";
 import { handle } from "../src/lib/api";
-import { authRequest, sessionClient, sessionKey } from "../src/gui/auth";
+import {
+  authRequest,
+  connectEmail,
+  readApi,
+  sessionClient,
+  sessionKey,
+} from "../src/gui/auth";
 import { hashKey } from "../src/lib/keys";
 import type { DB } from "../src/lib/db";
 const base = "https://auth.example.test";
@@ -62,8 +68,12 @@ test("ES256 validates signature, expiry, issuer, audience and UUID; caches JWKS"
     { aud: ["authenticated"] },
     { sub: "email@example.test" },
     { exp: "tomorrow" },
+    { nbf: Date.now() / 1000 + 3600 },
+    { nbf: "tomorrow" },
+    { nbf: null },
   ])
     assert.equal(await verify(token(payload), base), null);
+  assert.equal(await verify(token({ nbf: Date.now() / 1000 - 1 }), base), sub);
   const other = generateKeyPairSync("ec", { namedCurve: "P-256" });
   assert.equal(await verify(token({}, other.privateKey), base), null);
   assert.equal(
@@ -120,6 +130,16 @@ test("unlinked JWT returns 403 before any job query", async () => {
         return { rows: [], rowCount: 0 };
       },
     };
+    const premature = await handle(
+      new Request("https://console.test/api/jobs", {
+        headers: {
+          Authorization: "Bearer " + token({ nbf: Date.now() / 1000 + 3600 }),
+        },
+      }),
+      db,
+    );
+    assert.equal(premature.status, 401);
+    assert.equal(queries, 0);
     const response = await handle(
       new Request("https://console.test/api/jobs", {
         headers: { Authorization: "Bearer " + token() },
@@ -317,6 +337,131 @@ test("stored sessions restore, refresh once across concurrent reads, and clear o
     assert.equal(changes.at(-1), null);
   } finally {
     globalThis.fetch = originalFetch;
+    if (storageDescriptor)
+      Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+    if (oldUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = oldUrl;
+    if (oldKey === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = oldKey;
+  }
+});
+
+test("unknown kids share one JWKS fetch per window, including concurrent misses", async (t) => {
+  t.mock.method(Date, "now", () => 1800000000000);
+  const { verify, calls } = verifier();
+  const miss = (kid: string) =>
+    verify(token({}, privateKey, { alg: "ES256", kid }), base);
+  assert.deepEqual(
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) => miss("unknown-" + i)),
+    ),
+    Array(10).fill(null),
+  );
+  for (let i = 0; i < 10; i++) assert.equal(await miss("other-" + i), null);
+  assert.equal(calls(), 1);
+  assert.equal(await verify(token(), base), sub);
+  t.mock.method(Date, "now", () => 1800000300001);
+  assert.equal(await miss("rotated"), null);
+  assert.equal(calls(), 2);
+});
+test("JWKS streamed body is capped before parsing even without Content-Length", async () => {
+  let cancelled = false;
+  let calls = 0;
+  const verify = jwtVerifier(async () => {
+    calls++;
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          const valid = JSON.stringify({
+            keys: [{ ...publicKey.export({ format: "jwk" }), kid: "test" }],
+          });
+          controller.enqueue(new TextEncoder().encode(valid));
+          controller.enqueue(new Uint8Array(65536).fill(32));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+    );
+  });
+  assert.equal(await verify(token(), base), null);
+  assert.equal(cancelled, true);
+  assert.equal(await verify(token(), base), null);
+  assert.equal(calls, 1);
+});
+
+test("connect states: confirmation, generic credentials, unlinked account, and sign-out clearing", async (t) => {
+  const oldUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const oldKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = base;
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "public-anon";
+  const store = new Map<string, string>();
+  const storageDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage",
+  );
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, value),
+      removeItem: (key: string) => store.delete(key),
+    },
+  });
+  try {
+    const changes: unknown[] = [];
+    const client = sessionClient((session) => changes.push(session));
+    const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+      Response.json({ user: { id: sub } }),
+    );
+    assert.equal(
+      await connectEmail("signup", "a@example.test", "secret", client.save),
+      "Check your email to confirm your account, then sign in.",
+    );
+    assert.deepEqual(changes, []);
+    assert.equal(store.size, 0);
+    fetchMock.mock.mockImplementation(async () =>
+      Response.json({ error: "sensitive upstream details" }, { status: 400 }),
+    );
+    await assert.rejects(
+      connectEmail("password", "a@example.test", "wrong", client.save),
+      {
+        message:
+          "Authentication failed. Check your credentials and email confirmation.",
+      },
+    );
+    assert.deepEqual(changes, []);
+    const session = {
+      access_token: "access",
+      refresh_token: "refresh",
+      user: { id: sub },
+    };
+    fetchMock.mock.mockImplementation(async () => Response.json(session));
+    assert.equal(
+      await connectEmail("password", "a@example.test", "secret", client.save),
+      "",
+    );
+    assert.equal(store.has(sessionKey), true);
+    fetchMock.mock.mockImplementation(async () =>
+      Response.json({ error: "account not linked" }, { status: 403 }),
+    );
+    await assert.rejects(
+      readApi(
+        "/api/jobs",
+        "access",
+        new AbortController().signal,
+        client.fetch,
+      ),
+      { message: "This account isn't linked to any Conduit workspace yet." },
+    );
+    fetchMock.mock.mockImplementation(
+      async () => new Response(null, { status: 204 }),
+    );
+    await client.logout();
+    assert.equal(store.has(sessionKey), false);
+    assert.equal(changes.at(-1), null);
+  } finally {
     if (storageDescriptor)
       Object.defineProperty(globalThis, "localStorage", storageDescriptor);
     else Reflect.deleteProperty(globalThis, "localStorage");

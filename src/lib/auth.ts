@@ -6,6 +6,7 @@ type Jwk = webcrypto.JsonWebKey & { kid?: string; alg?: string; use?: string };
 export function jwtVerifier(
   fetcher: typeof fetch = (...args) => fetch(...args),
 ) {
+  const pending = new Map<string, Promise<{ keys: Jwk[]; expires: number }>>();
   const cache = new Map<string, { keys: Jwk[]; expires: number }>();
   return async (token: string, base: string): Promise<string | null> => {
     try {
@@ -21,21 +22,46 @@ export function jwtVerifier(
       const issuer = base.replace(/\/$/, "") + "/auth/v1";
       const now = Date.now();
       let entry = cache.get(issuer);
-      if (
-        !entry ||
-        entry.expires <= now ||
-        !entry.keys.some((k) => k.kid === header.kid)
-      ) {
-        const response = await fetcher(issuer + "/.well-known/jwks.json", {
-          signal: AbortSignal.timeout(5000),
-          redirect: "error",
-        });
-        if (!response.ok) return null;
-        const body = await response.json();
-        if (!Array.isArray(body.keys)) return null;
-        entry = { keys: body.keys, expires: now + 300000 };
-        cache.set(issuer, entry);
+      let loading = pending.get(issuer);
+      if (!loading && (!entry || entry.expires <= now)) {
+        loading = (async () => {
+          // Cache misses and failures for the window too.
+          const fresh = { keys: [] as Jwk[], expires: now + 300000 };
+          cache.set(issuer, fresh);
+          try {
+            const response = await fetcher(issuer + "/.well-known/jwks.json", {
+              signal: AbortSignal.timeout(5000),
+              redirect: "error",
+            });
+            if (!response.ok || !response.body) return fresh;
+            const reader = response.body.getReader();
+            const chunks: Uint8Array[] = [];
+            let size = 0;
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                size += value.byteLength;
+                if (size > 65536) {
+                  await reader.cancel();
+                  return fresh;
+                }
+                chunks.push(value);
+              }
+            } finally {
+              reader.releaseLock();
+            }
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            if (Array.isArray(body.keys)) fresh.keys = body.keys;
+          } catch {
+            // Retrieval failures remain fail-closed for the cache window.
+          }
+          return fresh;
+        })().finally(() => pending.delete(issuer));
+        pending.set(issuer, loading);
       }
+      if (loading) entry = await loading;
+      if (!entry) return null;
       const jwk = entry.keys.find(
         (k) =>
           k.kid === header.kid &&
@@ -62,6 +88,10 @@ export function jwtVerifier(
         typeof payload.exp !== "number" ||
         !Number.isFinite(payload.exp) ||
         payload.exp <= now / 1000 ||
+        (payload.nbf !== undefined &&
+          (typeof payload.nbf !== "number" ||
+            !Number.isFinite(payload.nbf) ||
+            payload.nbf > now / 1000)) ||
         payload.iss !== issuer ||
         payload.aud !== "authenticated" ||
         typeof payload.sub !== "string" ||

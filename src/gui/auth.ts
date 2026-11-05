@@ -132,3 +132,67 @@ export function sessionClient(changed: (session: Session | null) => void) {
     },
   };
 }
+
+export async function readApi(
+  path: string,
+  key: string,
+  signal: AbortSignal,
+  transport: (
+    path: string,
+    init: RequestInit,
+    token: string,
+  ) => Promise<Response>,
+) {
+  if (
+    !/^\/api\/(workers|jobs(?:\?[^#]*)?|jobs\/[a-zA-Z0-9-]+\/(executions|changes|publication))$/.test(
+      path,
+    )
+  )
+    throw Error("Unsupported read");
+  const r = await transport(
+    path,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${key}` },
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      signal,
+    },
+    key,
+  );
+  if (
+    r.status === 403 &&
+    (
+      await r
+        .clone()
+        .json()
+        .catch(() => null)
+    )?.error === "account not linked"
+  )
+    throw Error("This account isn't linked to any Conduit workspace yet.");
+  if (!r.ok)
+    throw Error(
+      r.status === 401
+        ? "Key not recognized. Connect with a valid read-only Instinct key."
+        : r.status === 403
+          ? "This key needs jobs:read permission."
+          : r.status === 404
+            ? "Not available for this job"
+            : `Service unavailable (${r.status})`,
+    );
+  return r.json();
+}
+export async function connectEmail(
+  action: "password" | "signup",
+  email: string,
+  password: string,
+  save: (session: Session) => void,
+): Promise<string> {
+  const session = await gotrue(action, { email, password });
+  if (session) {
+    save(session);
+    return "";
+  }
+  return "Check your email to confirm your account, then sign in.";
+}
