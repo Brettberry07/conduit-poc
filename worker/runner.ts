@@ -3,10 +3,17 @@ import { join } from "node:path";
 export type ClaimedJob = {
   id: string;
   claim_token: string;
-  task: "simulate-development" | "simulate-failure";
+  task: "simulate-development" | "simulate-failure" | "codex_task";
+  title?: string;
+  instructions?: string;
+  acceptance_criteria?: string;
+  project?: string;
+  worker_id?: string;
+  attempt_count?: number;
 };
 type Journal = {
   job: ClaimedJob;
+  attempt_dir?: string;
   outcome?: {
     action: "completed" | "failed";
     progress: number;
@@ -57,37 +64,55 @@ export async function cycle(
     });
   try {
     if (!journal.outcome) {
-      // Renew before every bounded simulation step. A failed request stops work immediately.
-      for (let step = 0; step < 5; step++) {
-        if (stopping()) return false;
-        await report({ action: "progress", progress: step * 20 });
-        await call("/api/heartbeat", {});
-        log("progress", { job_id: job.id, step: step + 1 });
-        await wait(1000);
+      if (job.task === "codex_task") {
+        const { executeCodex, cleanupAttemptAuth } = await import("./codex");
+        if (journal.attempt_dir) await cleanupAttemptAuth(journal.attempt_dir);
+        journal.outcome = await executeCodex(
+          job,
+          async () => {
+            await report({ action: "progress", progress: 10 });
+            await call("/api/heartbeat", {});
+          },
+          stopping,
+          async (attempt) => {
+            journal.attempt_dir = attempt;
+            await save(journal);
+          },
+        );
+        await save(journal);
+      } else {
+        // Renew before every bounded simulation step. A failed request stops work immediately.
+        for (let step = 0; step < 5; step++) {
+          if (stopping()) return false;
+          await report({ action: "progress", progress: step * 20 });
+          await call("/api/heartbeat", {});
+          log("progress", { job_id: job.id, step: step + 1 });
+          await wait(1000);
+        }
+        if (
+          job.task !== "simulate-development" &&
+          job.task !== "simulate-failure"
+        )
+          throw Error("Unsupported task");
+        journal.outcome =
+          job.task === "simulate-failure"
+            ? {
+                action: "failed",
+                progress: 100,
+                error: "Predefined simulated failure",
+              }
+            : {
+                action: "completed",
+                progress: 100,
+                result: {
+                  simulated: true,
+                  summary:
+                    "Simulated planning, implementation, and verification completed.",
+                  steps: 5,
+                },
+              };
+        await save(journal); // Persist outcome before reporting: lost responses can be retried after restart.
       }
-      if (
-        job.task !== "simulate-development" &&
-        job.task !== "simulate-failure"
-      )
-        throw Error("Unsupported task");
-      journal.outcome =
-        job.task === "simulate-failure"
-          ? {
-              action: "failed",
-              progress: 100,
-              error: "Predefined simulated failure",
-            }
-          : {
-              action: "completed",
-              progress: 100,
-              result: {
-                simulated: true,
-                summary:
-                  "Simulated planning, implementation, and verification completed.",
-                steps: 5,
-              },
-            };
-      await save(journal); // Persist outcome before reporting: lost responses can be retried after restart.
     }
     await report(journal.outcome);
     log(journal.outcome.action, { job_id: job.id });

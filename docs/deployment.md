@@ -1,13 +1,15 @@
 # Supabase + Vercel deployment runbook
 
-**Current deployment (approved November 4, 2026):**
+**Current deployment (Phase 3 verified November 5, 2026):**
 
 - API: [https://conduit-poc.vercel.app](https://conduit-poc.vercel.app)
-- Vercel project: `prj_hJEeIrQwueIgVsyQcBkQDmg0ulDL`; production deployment `dpl_Fsr1LexKJHhrkXGepfxhYfbvjq99`, Node 24, `iad1`.
+- Vercel project: `prj_hJEeIrQwueIgVsyQcBkQDmg0ulDL`; production deployment `dpl_Ds7DNgTCKLuGpkS4crMHVBM34qRy`, Node 24, `iad1`.
 - Supabase: [conduit-poc](https://supabase.com/dashboard/project/noftwqvntanjjgdchmmy), project ref `noftwqvntanjjgdchmmy`, `us-east-1`, PostgreSQL 17.
 - Runtime connects through `aws-0-us-east-1.pooler.supabase.com:6543` as `conduit_runtime.<project-ref>` with verified TLS and the official Supabase CA. Runtime credentials are stored as Vercel environment secrets, never source files.
 - Local key CLI uses the separately provisioned `conduit_key_admin` login through port 5432. It can manage keys but cannot read jobs, create database roles, or access migration history.
 - Instinct delivery file: `.secrets/instinct-hosted.json`; worker delivery file: `.secrets/worker-hosted.json`. Both expire December 4, 2026, at the timestamps in their private metadata.
+
+Phase 3 real execution and intentional verification failure both passed through this hosted API, Supabase, and the local Node 24 worker. See [PHASE_3_TESTING.md](../PHASE_3_TESTING.md) for job IDs, commands, and results.
 
 Do not recreate these resources or rerun role provisioning. The steps below describe a **new installation**. Additional resources or deployment targets require their own authorization; never reuse StillOn or another application's resources. No automatic Git deployment was configured.
 

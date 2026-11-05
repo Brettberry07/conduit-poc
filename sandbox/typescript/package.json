@@ -1,0 +1,9 @@
+{
+  "name": "conduit-disposable-typescript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs"
+  }
+}

@@ -1,6 +1,6 @@
 import type { DB } from "./db";
 export const LEASE_SECONDS = 30;
-export const publicColumns = `id,title,description,task,status,created_at,claimed_at,completed_at,worker_id,result,error,attempt_count,lease_expires_at,progress`;
+export const publicColumns = `id,title,description,task,instructions,acceptance_criteria,project,status,created_at,claimed_at,completed_at,worker_id,result,error,attempt_count,lease_expires_at,progress`;
 export async function claim(db: DB, worker: string) {
   // Exhausted abandoned jobs become terminal on the next poll.
   await db.query(`UPDATE orchestrator.jobs SET status='failed',error='Lease expired; attempt limit reached',
@@ -34,7 +34,7 @@ export async function report(
     `UPDATE orchestrator.jobs SET
     status=CASE WHEN status='running' AND $4<>'progress' THEN $4 ELSE status END,
     progress=CASE WHEN status='running' THEN greatest(progress,$5) ELSE progress END,
-    result=CASE WHEN status='running' AND $4='completed' THEN $6::jsonb ELSE result END,
+    result=CASE WHEN status='running' AND $4 IN ('completed','failed') THEN $6::jsonb ELSE result END,
     error=CASE WHEN status='running' AND $4='failed' THEN $7 ELSE error END,
     completed_at=CASE WHEN status='running' AND $4<>'progress' THEN clock_timestamp() ELSE completed_at END,
     lease_expires_at=CASE WHEN status='running' AND $4='progress' THEN clock_timestamp()+interval '30 seconds' ELSE NULL END

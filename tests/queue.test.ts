@@ -397,6 +397,75 @@ test(
           assert.equal((await req("/jobs?limit=100000")).status, 400);
         },
       );
+      await t.test(
+        "Codex input validation, idempotency, failed verification results and fencing",
+        async () => {
+          await reset();
+          const input = {
+            title: "Average",
+            task: "codex_task",
+            project: "typescript-sandbox",
+            instructions: "Implement average",
+            acceptance_criteria: "Tests pass",
+          };
+          const requestId = randomUUID();
+          for (const invalid of [
+            { ...input, project: "/tmp/arbitrary" },
+            { ...input, instructions: "" },
+            { ...input, command: "echo bad" },
+            { ...input, task: "simulate-development" },
+          ])
+            assert.equal(
+              (await req("/jobs", "submitter", "POST", invalid)).status,
+              400,
+            );
+          const submitted = await req(
+            "/jobs",
+            "submitter",
+            "POST",
+            input,
+            requestId,
+          );
+          assert.equal(submitted.status, 201);
+          const created = (await submitted.json()).job;
+          assert.equal(created.instructions, input.instructions);
+          assert.equal(
+            (
+              await req(
+                "/jobs",
+                "submitter",
+                "POST",
+                { ...input, instructions: "Changed" },
+                requestId,
+              )
+            ).status,
+            409,
+          );
+          const { job } = await worker("/api/claim", {});
+          assert.equal(job.id, created.id);
+          assert.equal(job.project, "typescript-sandbox");
+          const outcome = {
+            claim_token: job.claim_token,
+            action: "failed",
+            progress: 100,
+            error: "Verification failed",
+            result: {
+              execution: { status: "completed" },
+              verification: { status: "failed" },
+              changed_files: ["src/index.ts"],
+            },
+          };
+          await worker(`/api/jobs/${job.id}/report`, outcome);
+          await worker(`/api/jobs/${job.id}/report`, {
+            ...outcome,
+            result: { overwrite: true },
+          });
+          const final = (await (await req(`/jobs/${job.id}`)).json()).job;
+          assert.equal(final.status, "failed");
+          assert.deepEqual(final.result, outcome.result);
+          assert.equal(final.claim_token, undefined);
+        },
+      );
       await t.test("12 concurrent claims yield exactly one owner", async () => {
         await reset();
         await create();

@@ -151,3 +151,7 @@ See [the deployment runbook](docs/deployment.md), [acceptance tests](docs/manual
 - `GET /auth-check` uses `Authorization: Bearer <key>`. HTTP 200 with `authenticated: true` and `instinct_access: true` verifies both Instinct scopes (`jobs:create`, `jobs:read`). HTTP 401 means missing/invalid/expired/revoked credentials. HTTP 403 with `authenticated: true` means a valid key lacks Instinct permissions (including a worker key). HTTP 503 means the service could not validate the credential. Responses include principal/scopes/permission booleans, never plaintext keys or hashes.
 
 Both checks disable caching. Use `/api/workers` with the Instinct key to check worker availability, then POST a simulation and retrieve its result to prove the full loop.
+
+## Phase 3: real Codex execution
+
+See [PHASE_3_TESTING.md](PHASE_3_TESTING.md) for isolated TypeScript tasks, local Codex login, setup, smoke probes, failure handling, and current verification evidence. Simulation jobs remain supported.

@@ -114,7 +114,7 @@ test(
         )
       ).rows[0];
       const applied = await applyMigrations(admin, true);
-      assert.equal(applied.length, 4);
+      assert.equal(applied.length, 5);
       assert.deepEqual(await applyMigrations(admin), []);
       assert.ok(
         (await admin.query("SELECT revoked_at FROM orchestrator.api_keys"))

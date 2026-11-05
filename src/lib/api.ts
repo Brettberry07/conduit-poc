@@ -8,10 +8,33 @@ const createJob = z
     title: z.string().trim().min(1).max(200),
     description: z.string().max(4000).default(""),
     task: z
-      .enum(["simulate-development", "simulate-failure"])
+      .enum(["simulate-development", "simulate-failure", "codex_task"])
       .default("simulate-development"),
+    instructions: z.string().trim().min(1).max(12000).optional(),
+    acceptance_criteria: z.string().max(4000).optional(),
+    project: z.literal("typescript-sandbox").optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((v, c) => {
+    if (
+      v.task === "codex_task" &&
+      (!v.instructions || v.project !== "typescript-sandbox")
+    )
+      c.addIssue({
+        code: "custom",
+        message: "Codex requires instructions and allowed project",
+      });
+    if (
+      v.task !== "codex_task" &&
+      (v.instructions !== undefined ||
+        v.acceptance_criteria !== undefined ||
+        v.project !== undefined)
+    )
+      c.addIssue({
+        code: "custom",
+        message: "Development fields require codex_task",
+      });
+  });
 const reportBody = z
   .object({
     claim_token: uuid,
@@ -68,15 +91,27 @@ export async function handle(req: Request, db: DB): Promise<Response> {
       const {
         rows: [job],
       } = await db.query(
-        `INSERT INTO orchestrator.jobs(title,description,task,submitter_id,request_id)
-      VALUES($1,$2,$3,$4,$5) ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id
+        `INSERT INTO orchestrator.jobs(title,description,task,submitter_id,request_id,instructions,acceptance_criteria,project)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id
       RETURNING ${publicColumns}`,
-        [input.title, input.description, input.task, key.principal, requestId],
+        [
+          input.title,
+          input.description,
+          input.task,
+          key.principal,
+          requestId,
+          input.instructions ?? null,
+          input.acceptance_criteria ?? null,
+          input.project ?? null,
+        ],
       );
       if (
         job.title !== input.title ||
         job.description !== input.description ||
-        job.task !== input.task
+        job.task !== input.task ||
+        job.instructions !== (input.instructions ?? null) ||
+        job.acceptance_criteria !== (input.acceptance_criteria ?? null) ||
+        job.project !== (input.project ?? null)
       )
         return json(
           { error: "Idempotency key already used with different content" },
