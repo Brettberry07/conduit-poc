@@ -2,6 +2,8 @@
 
 [Project overview](../README.md)
 
+[Read-only web console](gui.md)
+
 ## Setup and operation
 
 | Guide                                                      | Use it for                                                                                                                    |
