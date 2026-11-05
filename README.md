@@ -1,5 +1,7 @@
 # Conduit
 
+[![Deploy](https://img.shields.io/github/deployments/Brettberry07/conduit-poc/production?label=deploy&logo=vercel)](https://conduit-poc.vercel.app) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?logo=typescript&logoColor=white) ![tests: node:test · offline](https://img.shields.io/badge/tests-node%3Atest%20%C2%B7%20offline-gray) ![License: ISC](https://img.shields.io/badge/license-ISC-blue)
+
 **From a development request to a reviewable draft pull request.**
 
 Conduit connects an assistant such as Instinct to a local Codex worker through an authenticated job API and a persistent PostgreSQL queue. Submit a task, track its execution, inspect the diff, and request revisions on the same PR.
@@ -7,6 +9,22 @@ Conduit connects an assistant such as Instinct to a local Codex worker through a
 The API coordinates the work; your local machine executes it. Each development task gets an isolated Git worktree, and verified changes become a **draft PR for human review**.
 
 [Workflow](#how-it-works) · [Get started](#get-started) · [Security](#boundaries-and-security) · [Documentation](docs/README.md)
+
+## Screenshots
+
+![Conduit job board (desktop) - fixture data](docs/screenshots/desktop-board.png)
+
+![Job detail drawer (desktop) - fixture data](docs/screenshots/desktop-board-detail.png)
+
+![Active workers view (desktop) - fixture data](docs/screenshots/desktop-active.png)
+
+![Needs-you queue (desktop) - fixture data](docs/screenshots/desktop-needsyou.png)
+
+Mobile layout:
+
+![Conduit job board (mobile) - fixture data](docs/screenshots/mobile-board.png)
+
+![Needs-you queue (mobile) - fixture data](docs/screenshots/mobile-needsyou.png)
 
 ## What it can do
 
