@@ -1,10 +1,10 @@
 # Instinct: 30-day key setup, requests and rotation
 
-The earlier Cloudflare/local-PostgreSQL communication loop was verified by Instinct. The new Vercel/Supabase loop is deployed and verified from the Mac worker. A request from Instinct itself is still the final external acceptance gate. Use **https://conduit-poc.vercel.app** and the new `.secrets/instinct-hosted.json` delivery file; the earlier hourly key is not registered in this hosted database.
+The earlier Cloudflare/local-PostgreSQL communication loop was verified by Instinct. The new Vercel/Supabase loop is deployed and verified from the Mac worker. A request from Instinct itself is still the final external acceptance gate. Use **https://YOUR-PROJECT.vercel.app** and the new `.secrets/<submitter-key>.json` delivery file; the earlier hourly key is not registered in this hosted database.
 
 ## Phase 4 handoff
 
-The hosted API and Mac worker now support registered development jobs and same-PR revisions. For Phase 4 use `.secrets/instinct-phase4.json` instead of the earlier delivery file; it has create/read/revise scopes and the same `instinct` principal. The older key remains active during handoff. Run `/Users/brettberry/.conduit/hosted/copy-instinct-key.sh` locally, paste into Instinct's secure secret field, and send [the prepared Phase 4 test prompt](instinct-phase4-test-prompt.md). No GitHub or database credential belongs in Instinct.
+The hosted API and Mac worker now support registered development jobs and same-PR revisions. For Phase 4 use `.secrets/<phase4-key>.json` instead of the earlier delivery file; it has create/read/revise scopes and the same `instinct` principal. The older key remains active during handoff. Run `/Users/YOU/.conduit/hosted/copy-api-key.sh` locally, paste into Instinct's secure secret field, and send [the prepared Phase 4 test prompt](instinct-phase4-test-prompt.md). No GitHub or database credential belongs in Instinct.
 
 ## Normal development tasks
 
@@ -12,13 +12,13 @@ The current worker registration permits normal source, test, documentation and c
 
 ## Secure key provisioning
 
-The initial hosted key is already generated in `.secrets/instinct-hosted.json` and expires December 4, 2026. Do not generate another key merely to finish the first test. Copy its token privately:
+The initial hosted key is already generated in `.secrets/<submitter-key>.json` and expires December 4, 2026. Do not generate another key merely to finish the first test. Copy its token privately:
 
 ```sh
-node -e 'const fs=require("node:fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).token)' .secrets/instinct-hosted.json | pbcopy
+node -e 'const fs=require("node:fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).token)' .secrets/<submitter-key>.json | pbcopy
 ```
 
-Paste only into Instinct's secure secret field, then clear the clipboard. Use `https://conduit-poc.vercel.app` as the API origin. The rest of this section describes generating future replacements.
+Paste only into Instinct's secure secret field, then clear the clipboard. Use `https://YOUR-PROJECT.vercel.app` as the API origin. The rest of this section describes generating future replacements.
 
 On the administrator's Mac, with `.env.admin.local` pointing only to the dedicated Supabase POC project:
 
@@ -49,7 +49,7 @@ The API has no login/OAuth/account flow. Instinct must support HTTPS and custom 
 Use the stable approved Vercel domain. Generate a **new UUID for each new logical job**, and persist it before submitting. Retry an ambiguous response with the same UUID and identical body:
 
 ```http
-POST https://conduit-poc.vercel.app/api/jobs
+POST https://YOUR-PROJECT.vercel.app/api/jobs
 Authorization: Bearer <securely injected key>
 Content-Type: application/json
 Idempotency-Key: <stable UUID for this job>
@@ -60,7 +60,7 @@ Idempotency-Key: <stable UUID for this job>
 Expect HTTP 201 with `{ "job": { "id": "...", "status": "queued", ... } }`. Save `job.id`. Poll every three seconds for up to a minute:
 
 ```http
-GET https://conduit-poc.vercel.app/api/jobs/<returned-job-id>
+GET https://YOUR-PROJECT.vercel.app/api/jobs/<returned-job-id>
 Authorization: Bearer <same securely injected key>
 ```
 
@@ -96,8 +96,8 @@ Record the Vercel domain, request UUID, job ID, HTTP status codes, final result 
 
 ## Check readiness and authentication first
 
-1. `GET https://conduit-poc.vercel.app/health` with no credential: expect 200 and `status: "ok"`, `database: "ok"`.
-2. `GET https://conduit-poc.vercel.app/auth-check` with the saved bearer key: expect 200, `authenticated: true`, and `instinct_access: true`. Both `permissions.create_jobs` and `permissions.read_jobs` must be true. No credential is returned.
+1. `GET https://YOUR-PROJECT.vercel.app/health` with no credential: expect 200 and `status: "ok"`, `database: "ok"`.
+2. `GET https://YOUR-PROJECT.vercel.app/auth-check` with the saved bearer key: expect 200, `authenticated: true`, and `instinct_access: true`. Both `permissions.create_jobs` and `permissions.read_jobs` must be true. No credential is returned.
 3. `GET /api/workers` with the same bearer key: confirm `mac-worker` is available before expecting immediate completion. Offline workers leave jobs queued.
 4. Submit and poll the simulation as described above. Only a completed result with `simulated: true` proves the complete loop.
 
