@@ -1,4 +1,4 @@
-import { SCOPES, credentialScopes } from "./keys";
+import { SCOPES, credentialScopes, requiredScope } from "./keys";
 
 // All inputs are explicit; describing the service needs no database or environment.
 export function info(request: Request): Response {
@@ -17,7 +17,8 @@ export function info(request: Request): Response {
     ],
     authentication: {
       scheme: "Bearer",
-      description: "Persistent API keys with scoped permissions",
+      description:
+        "Persistent API keys with scoped permissions. No single credential can use every endpoint. GET /auth-check requires a Bearer key.",
       scopes: [...SCOPES],
       credential_scopes: credentialScopes,
     },
@@ -34,6 +35,13 @@ export function info(request: Request): Response {
       "Draft pull requests",
       "Same-PR revisions",
       "Changes, diff, and publication retrieval",
+    ],
+    descriptor_status:
+      "This descriptor is static, built from the code, and does not prove current worker availability. Use GET /api/workers for live worker readiness.",
+    limitations: [
+      "The worker sandbox has no network access.",
+      "The repository full test suite cannot run inside the sandbox.",
+      "Configured verification is a bounded subset of the full suite.",
     ],
     endpoints: [
       "GET /",
@@ -59,20 +67,82 @@ export function info(request: Request): Response {
       "POST /api/jobs/{id}/artifacts",
       "POST /api/development/pending",
       "POST /api/development/reconcile",
-    ],
+    ].map((endpoint) => {
+      const [method, path] = endpoint.split(" ");
+      const scope = requiredScope(path, method);
+      return {
+        endpoint,
+        required_access: scope
+          ? "Bearer " +
+            (scope === "jobs:claim" || scope === "jobs:update"
+              ? "worker-only"
+              : "Instinct") +
+            " credential: " +
+            scope
+          : endpoint === "GET /auth-check"
+            ? "Bearer key"
+            : "public",
+      };
+    }),
   };
   const headers = { "Cache-Control": "no-store", Vary: "Accept" };
   if (prefersHtml(request.headers.get("accept") ?? "")) {
-    const content = JSON.stringify(descriptor, null, 2).replace(
-      /[&<>]/g,
-      (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character]!,
-    );
+    const section = (title: string, items: readonly string[]) =>
+      "<h2>" +
+      escapeHtml(title) +
+      "</h2><ul>" +
+      items.map((item) => "<li>" + escapeHtml(item) + "</li>").join("") +
+      "</ul>";
+    const content =
+      "<p>" +
+      escapeHtml(descriptor.service) +
+      "</p>" +
+      section("Descriptor status", [descriptor.descriptor_status]) +
+      section("Architecture", Object.values(descriptor.architecture)) +
+      section("Task types", descriptor.task_types) +
+      section("Authentication", [
+        descriptor.authentication.scheme,
+        descriptor.authentication.description,
+      ]) +
+      section("Scopes", descriptor.authentication.scopes) +
+      section(
+        "Credential scopes",
+        Object.entries(descriptor.authentication.credential_scopes).map(
+          ([credential, scopes]) => credential + ": " + scopes.join(", "),
+        ),
+      ) +
+      section("Capabilities", descriptor.capabilities) +
+      section("Development", descriptor.development) +
+      section("Limitations", descriptor.limitations) +
+      '<h2>Endpoints</h2><table><thead><tr><th scope="col">Endpoint</th><th scope="col">Required access</th></tr></thead><tbody>' +
+      descriptor.endpoints
+        .map(
+          ({ endpoint, required_access }) =>
+            "<tr><td><code>" +
+            escapeHtml(endpoint) +
+            "</code></td><td>" +
+            escapeHtml(required_access) +
+            "</td></tr>",
+        )
+        .join("") +
+      "</tbody></table>";
     return new Response(
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Conduit capabilities</title></head><body><h1>Conduit capabilities</h1><pre style="white-space:pre-wrap">${content}</pre></body></html>`,
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Conduit capabilities</title></head><body><h1>Conduit capabilities</h1>${content}</body></html>`,
       { headers: { ...headers, "Content-Type": "text/html; charset=utf-8" } },
     );
   }
   return Response.json(descriptor, { headers });
+}
+
+function escapeHtml(value: string): string {
+  const entities: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  return value.replace(/[&<>"']/g, (character) => entities[character]);
 }
 
 function prefersHtml(accept: string): boolean {

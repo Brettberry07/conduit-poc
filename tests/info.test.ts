@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { info } from "../src/lib/info";
-import { SCOPES, credentialScopes } from "../src/lib/keys";
+import { SCOPES, credentialScopes, requiredScope } from "../src/lib/keys";
 
 test("public info describes implemented capabilities without runtime details", async () => {
   const response = info(new Request("https://example.test/info"));
@@ -39,7 +39,64 @@ test("public info describes implemented capabilities without runtime details", a
     "POST /api/jobs/{id}/revisions",
     "POST /api/jobs/{id}/publication",
   ];
-  assert.deepEqual([...payload.endpoints].sort(), expected.sort());
+  assert.deepEqual(
+    payload.endpoints
+      .map((entry: { endpoint: string }) => entry.endpoint)
+      .sort(),
+    expected.sort(),
+  );
+  assert.deepEqual(
+    payload.endpoints
+      .filter(
+        (entry: { required_access: string }) =>
+          entry.required_access === "public",
+      )
+      .map((entry: { endpoint: string }) => entry.endpoint)
+      .sort(),
+    ["GET /", "GET /info", "GET /health"].sort(),
+  );
+  for (const entry of payload.endpoints) {
+    assert.equal(typeof entry.required_access, "string");
+    assert.ok(entry.required_access.length > 0);
+    const [method, path] = entry.endpoint.split(" ");
+    const scope = requiredScope(path, method);
+    if (scope)
+      assert.equal(
+        entry.required_access,
+        "Bearer " +
+          (scope === "jobs:claim" || scope === "jobs:update"
+            ? "worker-only"
+            : "Instinct") +
+          " credential: " +
+          scope,
+      );
+    if (entry.endpoint === "GET /auth-check")
+      assert.equal(entry.required_access, "Bearer key");
+  }
+  assert.match(
+    payload.authentication.description,
+    /No single credential can use every endpoint/,
+  );
+  assert.ok(
+    payload.authentication.description.includes(
+      "GET /auth-check requires a Bearer key",
+    ),
+  );
+  assert.deepEqual(payload.limitations, [
+    "The worker sandbox has no network access.",
+    "The repository full test suite cannot run inside the sandbox.",
+    "Configured verification is a bounded subset of the full suite.",
+  ]);
+  assert.match(payload.descriptor_status, /static, built from the code/);
+  assert.match(
+    payload.descriptor_status,
+    /does not prove current worker availability/,
+  );
+  assert.ok(
+    payload.descriptor_status.includes(
+      "GET /api/workers for live worker readiness",
+    ),
+  );
   const serialized = JSON.stringify(payload);
   assert.doesNotMatch(
     serialized,
@@ -68,12 +125,25 @@ test("HTML preference renders the same descriptor and varies by Accept", async (
     if (html) {
       assert.match(response.headers.get("content-type")!, /text\/html/);
       const body = await response.text();
-      const content = body
-        .match(/<pre[^>]*>([\s\S]*?)<\/pre>/)![1]
-        .replaceAll("&lt;", "<")
-        .replaceAll("&gt;", ">")
-        .replaceAll("&amp;", "&");
-      assert.deepEqual(JSON.parse(content), json);
+      assert.ok(body.includes("<h1>Conduit capabilities</h1>"));
+      assert.ok(body.includes("<ul>"));
+      assert.ok(body.includes("<table>"));
+      assert.ok(!body.includes("<pre"));
+      for (const entry of json.endpoints) {
+        assert.ok(body.includes(entry.endpoint));
+        assert.ok(body.includes(entry.required_access));
+      }
+      for (const limitation of json.limitations)
+        assert.ok(body.includes(limitation));
+      assert.ok(body.includes(json.descriptor_status));
+      assert.doesNotMatch(
+        body,
+        /cnd_live_|\/(?:Users|home|private|tmp|var|etc)\/|[A-Z]:\\/i,
+      );
+      assert.doesNotMatch(
+        body,
+        /localhost|127\.0\.0\.1|hostname|worker_id|project_id|process\.env|DATABASE_URL|key_prefix|key_hash/i,
+      );
     } else {
       assert.deepEqual(await response.json(), json);
     }
