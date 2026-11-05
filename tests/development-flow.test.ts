@@ -173,6 +173,9 @@ policyTest(
                 name: "unit_tests",
                 exit_code: failVerification ? 1 : 0,
                 timed_out: false,
+                output: failVerification
+                  ? "Example assertion failed"
+                  : "Tests passed",
               },
             ],
           };
@@ -433,6 +436,15 @@ policyTest(
           const outcome = await run(job);
           assert.equal(outcome.action, "failed");
           assert.equal((outcome.result as any).verification.status, "failed");
+          assert.equal(
+            (outcome.result as any).verification.checks[0].output,
+            "Example assertion failed",
+          );
+          const reported = await (await req(`/api/jobs/${j.id}`)).json();
+          assert.equal(
+            reported.job.result.verification.checks[0].output,
+            "Example assertion failed",
+          );
           assert.equal(independentFake.creates, 0);
           assert.equal(
             await remoteHead(

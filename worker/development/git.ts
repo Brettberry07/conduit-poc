@@ -77,17 +77,10 @@ export function safePath(path: string) {
       .some((p) => p === ".." || p === "." || !p || /[\x00-\x1f\x7f]/.test(p))
   );
 }
+// Project editing excludes only environment files and SSH directories. Other
+// credentials used by the controller remain outside the development sandbox.
 export function prohibited(path: string) {
-  return (
-    !safePath(path) ||
-    /(^|\/)(\.git(?:$|\/)|\.env(?:$|[./])|\.secrets(?:$|\/)|\.codex(?:$|\/)|\.ssh(?:$|\/)|node_modules(?:$|\/)|dist(?:$|\/)|build(?:$|\/)|coverage(?:$|\/)|\.next(?:$|\/)|\.tmp(?:$|\/)|\.conduit(?:$|\/))/.test(
-      path,
-    ) ||
-    /(^|\/)(id_rsa|id_ed25519|credentials[^/]*|auth\.json)$|\.(pem|p12|pfx|key)$/i.test(
-      path,
-    ) ||
-    path.startsWith(".github/workflows/")
-  );
+  return !safePath(path) || /(^|\/)(\.env(?:$|[./])|\.ssh(?:$|\/))/.test(path);
 }
 export function obviousSecret(text: string) {
   return /(?:cnd_live_[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*["'](?!EXAMPLE|PLACEHOLDER|<)[A-Za-z0-9_+\/-]{20,}["'])/i.test(

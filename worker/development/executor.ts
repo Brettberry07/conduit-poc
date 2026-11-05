@@ -6,14 +6,17 @@ import {
   writeFile,
   rm,
   realpath,
-  symlink,
+  cp,
+  rename,
+  readdir,
   lstat,
 } from "node:fs/promises";
+import { constants } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxCommand, timeoutMs } from "../codex";
-import { type LocalProject, git, prohibited } from "./git";
+import { type LocalProject, git, obviousSecret } from "./git";
 import type { ClaimedJob } from "../runner";
 import { githubCredentialPaths } from "./github-auth";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -21,8 +24,114 @@ export type Check = {
   name: string;
   exit_code: number | null;
   timed_out: boolean;
+  output?: string;
 };
 export type Execution = { thread_id?: string; checks: Check[] };
+// Each job gets writable dependencies without modifying the user's checkout.
+// Replace links created by older workers, but preserve an existing private copy.
+export async function prepareDependencies(workspace: string, source?: string) {
+  if (!source) return;
+  const dependencies = await realpath(source);
+  const destination = join(workspace, "node_modules");
+  const entry = await lstat(destination).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return undefined;
+    throw e;
+  });
+  if (entry?.isSymbolicLink()) {
+    if ((await realpath(destination)) !== dependencies)
+      throw Error(
+        "Dependency directory differs from approved local configuration",
+      );
+    await rm(destination);
+  } else if (entry) {
+    if (!entry.isDirectory())
+      throw Error("Dependency destination is not a directory");
+    return;
+  }
+  const staging = await mkdtemp(join(workspace, ".conduit-deps-"));
+  try {
+    await cp(dependencies, join(staging, "node_modules"), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+      verbatimSymlinks: true,
+    });
+    await rename(join(staging, "node_modules"), destination);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+// Include nested/custom environment files, rather than just three root names.
+export async function protectedProjectPaths(
+  workspace: string,
+): Promise<string[]> {
+  const paths = [join(workspace, ".env"), join(workspace, ".ssh")];
+  async function walk(directory: string) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (
+        entry.name === ".ssh" ||
+        entry.name === ".env" ||
+        entry.name.startsWith(".env.")
+      )
+        paths.push(path);
+      else if (entry.isDirectory()) await walk(path);
+    }
+  }
+  await walk(workspace);
+  return paths;
+}
+
+// Shared by execution and the real-sandbox regression check.
+export async function developmentSandboxConfig(
+  workspace: string,
+  repository: string,
+  config: LocalProject,
+  temporary: string,
+  node: string,
+  login = process.env.CODEX_HOME ?? join(homedir(), ".codex"),
+) {
+  const gitDir = (
+    await git(workspace, ["rev-parse", "--absolute-git-dir"])
+  ).trim();
+  const common = await realpath(
+    resolve(
+      workspace,
+      (await git(workspace, ["rev-parse", "--git-common-dir"])).trim(),
+    ),
+  );
+  const grants = new Map<string, string>([
+    [config.storage_root, "deny"],
+    [temporary, "deny"],
+    [login, "deny"],
+    [root, "deny"],
+    [repository, "deny"],
+    [dirname(node), "read"],
+    [workspace, "write"],
+    [join(temporary, "scratch"), "write"],
+    [join(workspace, ".git"), "read"],
+    [common, "read"],
+    [gitDir, "read"],
+  ]);
+  for (const file of [
+    process.env.CONDUIT_GITHUB_TOKEN_FILE,
+    process.env.CONDUIT_GITHUB_POLICY_TOKEN_FILE,
+    process.env.CONDUIT_GITHUB_SECURITY_FILE,
+    process.env.WORKER_KEY_FILE,
+    process.env.CONDUIT_PROJECTS_FILE,
+  ])
+    if (file)
+      grants.set(await realpath(file).catch(() => resolve(file)), "deny");
+  for (const p of config.policy.read_only_paths)
+    grants.set(join(workspace, p), "read");
+  for (const path of await protectedProjectPaths(workspace))
+    grants.set(path, "deny");
+  grants.set(join(homedir(), ".ssh"), "deny");
+  for (const path of githubCredentialPaths())
+    grants.set(await realpath(path).catch(() => path), "deny");
+  return `default_permissions = "conduit"\napproval_policy = "never"\nallow_login_shell = false\nweb_search = "disabled"\n[permissions.conduit.filesystem]\n":minimal" = "read"\n"/tmp" = "deny"\n"/private/tmp" = "deny"\n"/var/folders" = "deny"\n"/private/var/folders" = "deny"\n${[...grants].map(([p, v]) => `${JSON.stringify(p)} = ${JSON.stringify(v)}`).join("\n")}\n[permissions.conduit.network]\nenabled = false\n`;
+}
+
 export async function executeWorktree(
   workspace: string,
   repository: string,
@@ -45,14 +154,7 @@ export async function executeWorktree(
     home = join(temporary, "home"),
     scratch = join(temporary, "scratch");
   const login = process.env.CODEX_HOME ?? join(homedir(), ".codex");
-  const node = await realpath(process.execPath),
-    gitDir = (await git(workspace, ["rev-parse", "--absolute-git-dir"])).trim();
-  const common = await realpath(
-    resolve(
-      workspace,
-      (await git(workspace, ["rev-parse", "--git-common-dir"])).trim(),
-    ),
-  );
+  const node = await realpath(process.execPath);
   const controller = new AbortController();
   let leaseError: unknown,
     renewing = false;
@@ -71,66 +173,15 @@ export async function executeWorktree(
       await readFile(join(login, "auth.json")),
       { mode: 0o600 },
     );
-    if (config.dependency_directory) {
-      const dependencies = await realpath(config.dependency_directory);
-      const destination = join(workspace, "node_modules");
-      const entry = await lstat(destination).catch(
-        (e: NodeJS.ErrnoException) => {
-          if (e.code === "ENOENT") return undefined;
-          throw e;
-        },
-      );
-      if (!entry) await symlink(dependencies, destination);
-      else if ((await realpath(destination)) !== dependencies)
-        throw Error(
-          "Dependency directory differs from approved local configuration",
-        );
-    }
-    const grants = new Map<string, string>([
-      [config.storage_root, "deny"],
-      [temporary, "deny"],
-      [login, "deny"],
-      [root, "deny"],
-      [repository, "deny"],
-      [dirname(node), "read"],
-      [workspace, "write"],
-      [scratch, "write"],
-      [join(workspace, ".git"), "deny"],
-      [common, "deny"],
-      [gitDir, "deny"],
-      [join(workspace, ".codex"), "deny"],
-    ]);
-    if (config.dependency_directory) {
-      grants.set(await realpath(config.dependency_directory), "read");
-      grants.set(join(workspace, "node_modules"), "read");
-    }
-    for (const file of [
-      process.env.CONDUIT_GITHUB_TOKEN_FILE,
-      process.env.CONDUIT_GITHUB_POLICY_TOKEN_FILE,
-      process.env.CONDUIT_GITHUB_SECURITY_FILE,
-      process.env.WORKER_KEY_FILE,
-      process.env.CONDUIT_PROJECTS_FILE,
-    ])
-      if (file)
-        grants.set(await realpath(file).catch(() => resolve(file)), "deny");
-    const tracked = (await git(workspace, ["ls-files", "-z"]))
-      .split("\0")
-      .filter(Boolean);
-    for (const file of tracked)
-      if (prohibited(file)) grants.set(join(workspace, file), "deny");
-    for (const p of config.policy.read_only_paths)
-      grants.set(join(workspace, p), "read");
-    for (const p of [
-      ".env",
-      ".env.local",
-      ".env.production",
-      ".secrets",
-      ".ssh",
-    ])
-      grants.set(join(workspace, p), "deny");
-    for (const path of githubCredentialPaths())
-      grants.set(await realpath(path).catch(() => path), "deny");
-    const content = `default_permissions = "conduit"\napproval_policy = "never"\nallow_login_shell = false\nweb_search = "disabled"\n[permissions.conduit.filesystem]\n":minimal" = "read"\n"/tmp" = "deny"\n"/private/tmp" = "deny"\n"/var/folders" = "deny"\n"/private/var/folders" = "deny"\n${[...grants].map(([p, v]) => `${JSON.stringify(p)} = ${JSON.stringify(v)}`).join("\n")}\n[permissions.conduit.network]\nenabled = false\n`;
+    await prepareDependencies(workspace, config.dependency_directory);
+    const content = await developmentSandboxConfig(
+      workspace,
+      repository,
+      config,
+      temporary,
+      node,
+      login,
+    );
     await writeFile(join(auth, "config.toml"), content, { mode: 0o600 });
     const env = {
       NODE_ENV: "production" as const,
@@ -152,7 +203,7 @@ export async function executeWorktree(
         join(root, "package.json"),
         join(auth, "auth.json"),
         join(login, "auth.json"),
-        join(workspace, ".git"),
+        join(workspace, ".env"),
         ...githubCredentialPaths().map((path) => join(path, "hosts.yml")),
       ],
       workspace,
@@ -204,7 +255,7 @@ export async function executeWorktree(
       child.send({
         workspace,
         timeout: timeoutMs(),
-        instructions: `${job.title}\n${job.instructions}\nAcceptance criteria: ${job.acceptance_criteria ?? ""}\nWork only on source files in this worktree. Git is managed by Conduit; do not commit, push, merge, change Git metadata, or access credentials. Verification will run separately. Previous branch contents are authoritative.`,
+        instructions: `${job.title}\n${job.instructions}\nAcceptance criteria: ${job.acceptance_criteria ?? ""}\nWork in this worktree: application code, tests, configuration, dependencies, generated files and GitHub workflows may be changed. Do not access .env files or .ssh directories. Git inspection is available; Conduit manages commits and publication, so do not commit, push, merge or change Git metadata. Verification will run separately. Previous branch contents are authoritative.`,
       });
     }).finally(() => {
       clearTimeout(timer);
@@ -233,6 +284,12 @@ export async function executeWorktree(
         name: r.name,
         exit_code: r.exit_code,
         timed_out: r.timed_out,
+        output: obviousSecret(r.output)
+          ? "Potential secret in verification output; contents withheld"
+          : r.output
+              .replaceAll(workspace, "[worktree]")
+              .replaceAll(temporary, "[temporary]")
+              .replaceAll(repository, "[repository]"),
       });
     }
     if (leaseError) throw leaseError;

@@ -8,6 +8,8 @@ import {
   rm,
   rename,
   symlink,
+  realpath,
+  lstat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +32,13 @@ import {
 } from "../worker/development/git";
 import { captureChanges, commitChanges } from "../worker/development/changes";
 import { validateRegistration } from "../scripts/project";
+import {
+  prepareDependencies,
+  protectedProjectPaths,
+  developmentSandboxConfig,
+} from "../worker/development/executor";
+import { sandboxCommand } from "../worker/codex";
+import { dirname } from "node:path";
 import { fixture, fakeGitHub } from "./helpers/development";
 // Exported fixtures are consumed by development-flow.test.ts; test registration is kept local.
 test("branch naming is sanitized, bounded and collision resistant", () => {
@@ -48,7 +57,7 @@ test("branch naming is sanitized, bounded and collision resistant", () => {
   ])
     assert.equal(branchSchema.safeParse(bad).success, false);
 });
-test("repository and workspace policies reject credentials, traversal and workflow changes", () => {
+test("workspace policies protect environment and SSH paths and honor configured limits", () => {
   const policy = {
     allowed_paths: ["src/", "README.md"],
     read_only_paths: ["src/locked.ts"],
@@ -59,7 +68,7 @@ test("repository and workspace policies reject credentials, traversal and workfl
     ".env",
     ".env.production",
     "src/.env.local",
-    "src/credentials.json",
+    "src/.ssh/config",
     ".github/workflows/push.yml",
     "src/locked.ts",
   ])
@@ -74,6 +83,158 @@ test("repository and workspace policies reject credentials, traversal and workfl
   );
   assert.equal(obviousSecret("github_pat_" + "x".repeat(40)), true);
 });
+
+test("broad development permits dependencies, generated files and workflow artifacts", async () => {
+  const f = await fixture();
+  try {
+    const workspace = join(f.dir, "development");
+    await createWorktree(
+      f.repo,
+      workspace,
+      featureBranch(randomUUID(), "normal development"),
+      f.start,
+    );
+    const paths = [
+      ".github/workflows/check.yml",
+      "node_modules/example/index.js",
+      ".next/types/routes.d.ts",
+      "build/result.txt",
+      "dist/result.txt",
+      "src/credentials.json",
+      ".codex/config.toml",
+    ];
+    for (const path of paths) {
+      assert.equal(permitted(path, f.config.policy), true, path);
+      await mkdir(dirname(join(workspace, path)), { recursive: true });
+      await writeFile(join(workspace, path), "example\n");
+    }
+    const changes = await captureChanges(workspace, f.start, f.config.policy);
+    assert.deepEqual(
+      new Set(changes.files.map((file) => file.path)),
+      new Set(paths),
+    );
+    await commitChanges(
+      workspace,
+      (await git(workspace, ["branch", "--show-current"])).trim(),
+      f.start,
+      changes,
+      "Normal development",
+    );
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("legacy dependency link becomes an ignored writable copy isolated from the checkout", async () => {
+  const f = await fixture();
+  try {
+    const workspace = join(f.dir, "dependencies"),
+      source = join(f.repo, "node_modules");
+    await createWorktree(
+      f.repo,
+      workspace,
+      featureBranch(randomUUID(), "dependencies"),
+      f.start,
+    );
+    await mkdir(source);
+    await writeFile(join(source, "example.js"), "original\n");
+    await writeFile(join(workspace, ".gitignore"), "node_modules/\n");
+    await symlink(source, join(workspace, "node_modules"));
+    assert.match(
+      await git(workspace, ["status", "--porcelain"]),
+      /node_modules/,
+    );
+    await prepareDependencies(workspace, source);
+    assert.equal(
+      (await lstat(join(workspace, "node_modules"))).isDirectory(),
+      true,
+    );
+    await writeFile(join(workspace, "node_modules/example.js"), "job edit\n");
+    assert.equal(
+      await readFile(join(source, "example.js"), "utf8"),
+      "original\n",
+    );
+    await prepareDependencies(workspace, source);
+    assert.equal(
+      await readFile(join(workspace, "node_modules/example.js"), "utf8"),
+      "job edit\n",
+    );
+    const changes = await captureChanges(workspace, f.start, f.config.policy);
+    assert.deepEqual(
+      changes.files.map((file) => file.path),
+      [".gitignore"],
+    );
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  "real development sandbox allows Git inspection and development writes while blocking environment and SSH files",
+  {
+    skip:
+      process.platform !== "darwin" || !process.versions.node.startsWith("24."),
+    timeout: 30000,
+  },
+  async () => {
+    const f = await fixture();
+    try {
+      const workspace = join(f.dir, "sandbox"),
+        temporary = join(f.dir, "temporary"),
+        auth = join(temporary, "auth"),
+        scratch = join(temporary, "scratch");
+      await createWorktree(
+        f.repo,
+        workspace,
+        featureBranch(randomUUID(), "sandbox"),
+        f.start,
+      );
+      for (const path of [
+        auth,
+        scratch,
+        join(workspace, "nested"),
+        join(workspace, ".ssh"),
+        join(workspace, "node_modules"),
+      ])
+        await mkdir(path, { recursive: true });
+      for (const path of [".env", "nested/.env.custom", ".ssh/config"])
+        await writeFile(join(workspace, path), "private fixture\n");
+      const protectedPaths = await protectedProjectPaths(workspace);
+      assert.ok(protectedPaths.includes(join(workspace, "nested/.env.custom")));
+      const node = await realpath(process.execPath);
+      await writeFile(
+        join(auth, "config.toml"),
+        await developmentSandboxConfig(
+          workspace,
+          f.repo,
+          f.config,
+          temporary,
+          node,
+        ),
+      );
+      const script = `const fs=require('node:fs');const assert=require('node:assert/strict');const cp=require('node:child_process');assert.ok(fs.statSync('.git').isFile());assert.match(cp.execFileSync('/usr/bin/git',['-c','core.fsmonitor=false','status','--porcelain'],{encoding:'utf8'}), /nested/);for(const p of ['.env','nested/.env.custom','.ssh/config']){assert.throws(()=>fs.readFileSync(p));assert.throws(()=>fs.writeFileSync(p,'changed'));}for(const p of ['node_modules/example.js','.next/types/example.ts','build/result.txt','.github/workflows/check.yml']){fs.mkdirSync(require('node:path').dirname(p),{recursive:true});fs.writeFileSync(p,'allowed');}console.log('Git inspection and development writes passed; environment and SSH denied');`;
+      const result = await sandboxCommand(
+        "development_permissions",
+        [node, "-e", script],
+        workspace,
+        {
+          NODE_ENV: "production",
+          OPENSSL_CONF: "/dev/null",
+          PATH: dirname(node) + ":/usr/bin:/bin",
+          HOME: temporary,
+          CODEX_HOME: auth,
+          TMPDIR: scratch,
+        },
+        new AbortController().signal,
+        15000,
+      );
+      assert.equal(result.exit_code, 0, result.output);
+    } finally {
+      await rm(f.dir, { recursive: true, force: true });
+    }
+  },
+);
+
 test("worktrees preserve dirty checkout, detect actual changes including renames, commit and push independently", async () => {
   const f = await fixture();
   try {
