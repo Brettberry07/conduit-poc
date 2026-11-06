@@ -1,5 +1,6 @@
-import type { DB } from "./db";
+import { transaction, type DB } from "./db";
 export const LEASE_SECONDS = 30;
+export const MAX_RUNNING_JOBS_PER_OWNER = 4;
 export const publicColumns = `id,title,description,task,instructions,acceptance_criteria,project,project_id,root_job_id,base_branch,dependency_job_ids,phase,status,created_at,claimed_at,completed_at,worker_id,result,error,attempt_count,lease_expires_at,progress`;
 export async function claim(db: DB, worker: string) {
   // Dependencies require actual GitHub merge reconciliation, never job completion alone.
@@ -16,10 +17,18 @@ export async function claim(db: DB, worker: string) {
   await db.query(`UPDATE orchestrator.jobs SET status='failed',error='Lease expired; attempt limit reached',
     completed_at=clock_timestamp(),lease_expires_at=NULL WHERE status='running'
     AND lease_expires_at<=clock_timestamp() AND attempt_count>=3`);
-  const { rows } = await db.query(
-    `WITH candidate AS (
+  const { rows } = await transaction(db, async (connection) => {
+    // The lock must be its own statement: READ COMMITTED takes the claim's
+    // snapshot after any previous claimer commits, rather than before waiting.
+    await connection.query(
+      "SELECT pg_advisory_xact_lock(hashtext('conduit-claim'))",
+    );
+    return connection.query(
+      `WITH candidate AS (
     SELECT id FROM orchestrator.jobs candidate_job WHERE attempt_count<3 AND
     (status='queued' OR (status='running' AND lease_expires_at<=clock_timestamp()))
+    AND (SELECT count(*) FROM orchestrator.jobs r WHERE r.status='running'
+      AND r.lease_expires_at>clock_timestamp() AND r.submitter_id=candidate_job.submitter_id) < $2
     AND (task<>'development' OR (
       EXISTS(SELECT 1 FROM orchestrator.projects p WHERE p.id=candidate_job.project_id AND p.enabled)
       AND EXISTS(SELECT 1 FROM orchestrator.development_tasks t WHERE t.job_id=candidate_job.root_job_id FOR UPDATE SKIP LOCKED)
@@ -29,8 +38,9 @@ export async function claim(db: DB, worker: string) {
     claimed_at=clock_timestamp(),completed_at=NULL,result=NULL,error=NULL,progress=0,phase=CASE WHEN j.task='development' THEN 'claimed' ELSE NULL END,
     attempt_count=attempt_count+1,lease_expires_at=clock_timestamp()+interval '30 seconds'
     FROM candidate c WHERE j.id=c.id RETURNING j.*`,
-    [worker],
-  );
+      [worker, MAX_RUNNING_JOBS_PER_OWNER],
+    );
+  });
   const job = rows[0];
   if (job?.task === "development") {
     const {

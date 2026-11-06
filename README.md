@@ -28,7 +28,7 @@ The API coordinates the work; your local machine executes it. Each development t
 - **Publish for review.** Configured checks gate publication. Retrieve execution history, changed-file metadata, bounded diffs and draft PR details through the API.
 - **Revise the same PR.** A revision is a new tracked job on the original branch and PR. Worktrees and recovery journals survive outcomes.
 
-`CONDUIT_MAX_AGENTS` accepts integers `1`–`4`; invalid values stop startup with an error. Dependency jobs wait until every prerequisite's pull request is merged; completion without a merge is not done.
+`CONDUIT_MAX_AGENTS` accepts integers `1`–`4`; invalid values stop startup with an error. The server also enforces a cap of 4 running jobs with live leases per owner (`submitter_id`), across all worker processes and identities. This bounds leased jobs; each worker's agent limit controls its physical execution concurrency. Expired leases do not consume a slot, and their local processes remain subject to existing lease fencing and recovery. Dependency jobs wait until every prerequisite's pull request is merged; completion without a merge is not done.
 
 The implementation also supports success/failure simulation jobs for connectivity checks and `codex_task` jobs in a fixed TypeScript sandbox. These simulations are queue probes; there is no simulator UI or device simulator integration.
 
