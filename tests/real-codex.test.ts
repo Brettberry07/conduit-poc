@@ -60,7 +60,10 @@ test(
           ++progressReports === 2
         ) {
           interruptedAttempt = JSON.parse(
-            await readFile(join(dir, "worker-state/journal.json"), "utf8"),
+            await readFile(
+              join(dir, `worker-state/journal-${req.url!.split("/")[3]}.json`),
+              "utf8",
+            ),
           ).attempt_dir;
           res.writeHead(503);
           res.end("{}");
@@ -199,7 +202,10 @@ test(
         if (scenario === "failure") {
           await pause(3500);
           restartedAttempt = JSON.parse(
-            await readFile(join(dir, "worker-state/journal.json"), "utf8"),
+            await readFile(
+              join(dir, `worker-state/journal-${created.id}.json`),
+              "utf8",
+            ),
           ).attempt_dir;
           const crashed = worker!;
           const exited = new Promise<void>((r) =>

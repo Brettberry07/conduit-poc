@@ -604,7 +604,7 @@ test(
         "worker resumes journal after network failure and restart",
         async () => {
           await reset();
-          await create();
+          const created = await create();
           const state = join(dir, "worker-restart");
           let calls = 0;
           const flaky: Call = async (path, body) => {
@@ -614,11 +614,13 @@ test(
           };
           await assert.rejects(cycle(flaky, state, async () => {}));
           const saved = JSON.parse(
-            await readFile(join(state, "journal.json"), "utf8"),
+            await readFile(join(state, `journal-${created.id}.json`), "utf8"),
           );
           assert.ok(saved.job.claim_token);
           await cycle(worker, state, async () => {});
-          await assert.rejects(readFile(join(state, "journal.json")));
+          await assert.rejects(
+            readFile(join(state, `journal-${created.id}.json`)),
+          );
           const jobs = (await (await req("/jobs")).json()).jobs;
           assert.equal(jobs[0].status, "completed");
           assert.equal(jobs[0].attempt_count, 1);
@@ -655,7 +657,7 @@ test(
         "restarted stale worker drops journal without executing task",
         async () => {
           await reset();
-          await create();
+          const created = await create();
           const state = join(dir, "stale");
           await assert.rejects(
             cycle(
@@ -676,7 +678,9 @@ test(
             steps++;
           });
           assert.equal(steps, 0);
-          await assert.rejects(readFile(join(state, "journal.json")));
+          await assert.rejects(
+            readFile(join(state, `journal-${created.id}.json`)),
+          );
         },
       );
       await t.test(
