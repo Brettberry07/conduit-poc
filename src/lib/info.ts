@@ -37,6 +37,7 @@ export function info(request: Request): Response {
       "Same-PR revisions",
       "Dependencies become done only when every prerequisite pull request is merged",
       "Changes, diff, and publication retrieval",
+      "Versioned agent manifest and PM playbook; normal and research-backed detailed preparation",
     ],
     descriptor_status:
       "This descriptor is static, built from the code, and does not prove current worker availability. Use GET /api/workers for live worker readiness.",
@@ -51,6 +52,7 @@ export function info(request: Request): Response {
       "GET /health",
       "GET /auth-check",
       "GET /api/jobs",
+      "GET /api/agent/manifest",
       "POST /api/jobs",
       "GET /api/jobs/{id}",
       "GET /api/workers",

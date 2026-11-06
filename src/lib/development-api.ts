@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { policyVersion, requireCurrentPolicy } from "./agent-protocol";
+import { DEVELOPMENT_BODY_LIMIT } from "./research";
 import { z } from "zod";
 import type { DB } from "./db";
 import type { Identity } from "./keys";
@@ -58,6 +61,34 @@ export async function developmentApi(
       return null;
     const input = developmentInput.parse(raw),
       requestId = z.string().uuid().parse(req.headers.get("idempotency-key"));
+    const {
+      rows: [existing],
+    } = await db.query(
+      `SELECT ${publicColumns} FROM orchestrator.jobs WHERE submitter_id=$1 AND request_id=$2`,
+      [key.principal, requestId],
+    );
+    const matches = (job: any, branch: string) =>
+      job.title === input.title &&
+      job.description === input.description &&
+      job.task === "development" &&
+      job.root_job_id === job.id &&
+      job.instructions === input.instructions &&
+      job.acceptance_criteria === input.acceptance_criteria &&
+      job.project_id === input.project_id &&
+      job.base_branch === branch &&
+      isDeepStrictEqual(job.dependency_job_ids, input.dependency_job_ids) &&
+      job.development_mode === input.development_mode &&
+      (job.original_request ?? job.instructions) ===
+        (input.original_request ?? input.instructions) &&
+      isDeepStrictEqual(job.research, input.research ?? null);
+    if (existing) {
+      if (!matches(existing, input.base_branch ?? existing.base_branch))
+        throw new DevelopmentError(
+          "Idempotency key already used with different content",
+        );
+      return json({ job: existing }, 201);
+    }
+    requireCurrentPolicy(input.policy_version);
     const { branch } = await approvedProject(
       db,
       input.project_id,
@@ -77,8 +108,8 @@ export async function developmentApi(
     const {
       rows: [job],
     } = await db.query(
-      `WITH created AS (INSERT INTO orchestrator.jobs(id,title,description,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch,dependency_job_ids,status)
-   VALUES($1,$2,$3,'development',$4,$5,$6,$7,$8,$1,$9,$10,CASE WHEN cardinality($10::uuid[])>0 THEN 'waiting_dependencies' ELSE 'queued' END)
+      `WITH created AS (INSERT INTO orchestrator.jobs(id,title,description,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch,dependency_job_ids,status,original_request,development_mode,policy_version,research,accepted_policy_version)
+   VALUES($1,$2,$3,'development',$4,$5,$6,$7,$8,$1,$9,$10,CASE WHEN cardinality($10::uuid[])>0 THEN 'waiting_dependencies' ELSE 'queued' END,$12,$13,$14,$15,$16)
    ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING *),
    registered AS (INSERT INTO orchestrator.development_tasks(job_id,project_id,branch,base_branch)
     SELECT id,project_id,$11,base_branch FROM created WHERE task='development' AND root_job_id=id ON CONFLICT(job_id) DO NOTHING)
@@ -95,19 +126,14 @@ export async function developmentApi(
         branch,
         input.dependency_job_ids,
         featureBranch(id, input.title),
+        input.original_request ?? input.instructions,
+        input.development_mode,
+        input.policy_version ?? null,
+        input.research ?? null,
+        policyVersion(),
       ],
     );
-    if (
-      job.title !== input.title ||
-      job.description !== input.description ||
-      job.task !== "development" ||
-      job.instructions !== input.instructions ||
-      job.acceptance_criteria !== input.acceptance_criteria ||
-      job.project_id !== input.project_id ||
-      job.base_branch !== branch ||
-      JSON.stringify(job.dependency_job_ids) !==
-        JSON.stringify(input.dependency_job_ids)
-    )
+    if (!matches(job, branch))
       throw new DevelopmentError(
         "Idempotency key already used with different content",
       );
@@ -244,8 +270,20 @@ export async function developmentApi(
     [job.root_job_id],
   );
   if (method === "POST" && op === "revisions") {
-    const v = revisionInput.parse(await readBody(req)),
+    const v = revisionInput.parse(await readBody(req, DEVELOPMENT_BODY_LIMIT)),
       requestId = z.string().uuid().parse(req.headers.get("idempotency-key"));
+    const mode = v.development_mode ?? job.development_mode;
+    const research = v.research ?? job.research;
+    const original = v.original_request ?? v.instructions;
+    const matches = (existing: any) =>
+      existing.task === "development" &&
+      existing.root_job_id === job.root_job_id &&
+      existing.id !== job.root_job_id &&
+      existing.instructions === v.instructions &&
+      existing.acceptance_criteria === v.acceptance_criteria &&
+      existing.development_mode === mode &&
+      (existing.original_request ?? existing.instructions) === original &&
+      isDeepStrictEqual(existing.research, research);
     const {
       rows: [existing],
     } = await db.query(
@@ -253,17 +291,18 @@ export async function developmentApi(
       [key.principal, requestId],
     );
     if (existing) {
-      if (
-        existing.root_job_id !== job.root_job_id ||
-        existing.id === job.root_job_id ||
-        existing.instructions !== v.instructions ||
-        existing.acceptance_criteria !== v.acceptance_criteria
-      )
+      if (!matches(existing))
         throw new DevelopmentError(
           "Idempotency key already used with different content",
         );
       return json({ job: existing }, 201);
     }
+    requireCurrentPolicy(v.policy_version);
+    if (mode === "detailed" && !research)
+      throw new DevelopmentError(
+        "Detailed mode requires a cited research brief",
+        400,
+      );
     await approvedProject(db, job.project_id, job.base_branch);
     if (
       task?.publication_state !== "published" ||
@@ -279,8 +318,8 @@ export async function developmentApi(
     const {
       rows: [revision],
     } = await db.query(
-      `INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch)
-   VALUES($1,'development',$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${publicColumns}`,
+      `INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch,original_request,development_mode,policy_version,research,accepted_policy_version)
+   VALUES($1,'development',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${publicColumns}`,
       [
         job.title,
         key.principal,
@@ -290,13 +329,14 @@ export async function developmentApi(
         job.project_id,
         job.root_job_id,
         job.base_branch,
+        original,
+        mode,
+        v.policy_version ?? null,
+        research,
+        policyVersion(),
       ],
     );
-    if (
-      revision.root_job_id !== job.root_job_id ||
-      revision.instructions !== v.instructions ||
-      revision.acceptance_criteria !== v.acceptance_criteria
-    )
+    if (!matches(revision))
       throw new DevelopmentError(
         "Idempotency key already used with different content",
       );

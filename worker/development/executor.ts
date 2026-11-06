@@ -1,3 +1,4 @@
+import { developmentContext } from "./context";
 import { spawn } from "node:child_process";
 import {
   mkdtemp,
@@ -255,7 +256,7 @@ export async function executeWorktree(
       child.send({
         workspace,
         timeout: timeoutMs(),
-        instructions: `${job.title}\n${job.instructions}\nAcceptance criteria: ${job.acceptance_criteria ?? ""}\nWork in this worktree: application code, tests, configuration, dependencies, generated files and GitHub workflows may be changed. Do not access .env files or .ssh directories. Git inspection is available; Conduit manages commits and publication, so do not commit, push, merge or change Git metadata. Verification will run separately. Previous branch contents are authoritative.`,
+        instructions: developmentContext(job),
       });
     }).finally(() => {
       clearTimeout(timer);

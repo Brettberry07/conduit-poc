@@ -2,6 +2,10 @@
 
 The earlier Cloudflare/local-PostgreSQL communication loop was verified by Instinct. The new Vercel/Supabase loop is deployed and verified from the Mac worker. A request from Instinct itself is still the final external acceptance gate. Use **https://YOUR-PROJECT.vercel.app** and the new `.secrets/<submitter-key>.json` delivery file; the earlier hourly key is not registered in this hosted database.
 
+## Phase 5A protocol
+
+For the reusable development protocol, use the [Phase 5A contract and staged rollout](phase-5a-agent-protocol.md) and give Instinct the [short standing instruction](instinct-standing-instruction.md) once. The authenticated manifest is authoritative for PM behavior after this release is installed; the task-specific prompts below remain historical handoffs. Hosted deployment and real Instinct adoption require separate acceptance.
+
 ## Phase 4 handoff
 
 The hosted API and Mac worker now support registered development jobs and same-PR revisions. For Phase 4 use `.secrets/<phase4-key>.json` instead of the earlier delivery file; it has create/read/revise scopes and the same `instinct` principal. The older key remains active during handoff. Run `/Users/YOU/.conduit/hosted/copy-api-key.sh` locally, paste into Instinct's secure secret field, and send [the prepared Phase 4 test prompt](instinct-phase4-test-prompt.md). No GitHub or database credential belongs in Instinct.

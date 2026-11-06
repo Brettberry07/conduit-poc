@@ -1,4 +1,6 @@
 import { developmentApi } from "./development-api";
+import { agentManifest } from "./agent-protocol";
+import { DEVELOPMENT_BODY_LIMIT } from "./research";
 import { DevelopmentError } from "./development";
 import { requiredScope } from "./keys";
 import { authenticateConsole } from "./auth";
@@ -73,7 +75,14 @@ async function body(req: Request, max = 32768) {
     chunks.push(value);
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString());
+    const parsed = JSON.parse(Buffer.concat(chunks).toString());
+    if (
+      new URL(req.url).pathname === "/api/jobs" &&
+      parsed?.task !== "development" &&
+      size > 32768
+    )
+      throw new Error("invalid-body");
+    return parsed;
   } catch {
     throw new Error("invalid-body");
   }
@@ -89,8 +98,12 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     const scope = requiredScope(path, method);
     if (!scope) return json({ error: "Not found" }, 404);
     if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
+    if (method === "GET" && path === "/api/agent/manifest")
+      return json(agentManifest());
     const creationBody =
-      method === "POST" && path === "/api/jobs" ? await body(req) : undefined;
+      method === "POST" && path === "/api/jobs"
+        ? await body(req, DEVELOPMENT_BODY_LIMIT)
+        : undefined;
     const development = await developmentApi(req, db, key, body, creationBody);
     if (development) return development;
     if (method === "POST" && path === "/api/jobs") {

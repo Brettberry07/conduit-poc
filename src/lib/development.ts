@@ -1,5 +1,10 @@
 import { z } from "zod";
 import type { DB } from "./db";
+import {
+  preparationFields,
+  validatePreparation,
+  containsCredential,
+} from "./research";
 export const branchSchema = z
   .string()
   .min(1)
@@ -52,6 +57,8 @@ export const developmentInput = z
     title: z.string().trim().min(1).max(200),
     description: z.string().max(4000).default(""),
     task: z.literal("development"),
+    ...preparationFields,
+    development_mode: preparationFields.development_mode.default("normal"),
     project_id: z.string().uuid(),
     instructions: z.string().trim().min(1).max(12000),
     acceptance_criteria: z.string().max(4000).default(""),
@@ -62,10 +69,16 @@ export const developmentInput = z
       .default([])
       .refine((a) => new Set(a).size === a.length),
   })
-  .strict();
+  .strict()
+  .superRefine(validatePreparation);
 export const revisionInput = z
   .object({
+    ...preparationFields,
     instructions: z.string().trim().min(1).max(12000),
     acceptance_criteria: z.string().max(4000).default(""),
   })
-  .strict();
+  .strict()
+  .refine(
+    (v) => !containsCredential(v),
+    "Credentials must not be submitted in job content",
+  );

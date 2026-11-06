@@ -15,6 +15,10 @@ export type ClaimedJob = {
   title?: string;
   instructions?: string;
   acceptance_criteria?: string;
+  original_request?: string | null;
+  development_mode?: "normal" | "detailed";
+  policy_version?: string | null;
+  research?: import("../src/lib/research").Research | null;
   project?: string;
   worker_id?: string;
   attempt_count?: number;

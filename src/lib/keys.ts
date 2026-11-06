@@ -40,7 +40,8 @@ export async function authenticate(
 export function requiredScope(path: string, method: string): Scope | null {
   if (
     method === "GET" &&
-    (/^\/api\/projects(?:\/[^/]+)?$/.test(path) ||
+    (path === "/api/agent/manifest" ||
+      /^\/api\/projects(?:\/[^/]+)?$/.test(path) ||
       /^\/api\/jobs\/[^/]+\/(revisions|executions|changes|diff|publication)$/.test(
         path,
       ))

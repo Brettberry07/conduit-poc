@@ -114,7 +114,7 @@ test(
         )
       ).rows[0];
       const applied = await applyMigrations(admin, true);
-      assert.equal(applied.length, 7);
+      assert.equal(applied.length, 8);
       assert.deepEqual(await applyMigrations(admin), []);
       assert.ok(
         (await admin.query("SELECT revoked_at FROM orchestrator.api_keys"))
@@ -331,6 +331,24 @@ test(
           assert.equal((await valid.json()).instinct_access, true);
           const workerCredential = JSON.parse(
             await readFile(workerFile, "utf8"),
+          );
+          const manifest = await request("/api/agent/manifest");
+          assert.equal(manifest.status, 200);
+          assert.equal(manifest.headers.get("cache-control"), "no-store");
+          assert.ok((await manifest.json()).playbook);
+          assert.equal(
+            (await fetch(origin + "/api/agent/manifest")).status,
+            401,
+          );
+          assert.equal(
+            (
+              await request(
+                "/api/agent/manifest",
+                undefined,
+                workerCredential.token,
+              )
+            ).status,
+            403,
           );
           assert.equal(
             (await request("/auth-check", undefined, workerCredential.token))

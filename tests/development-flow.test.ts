@@ -20,6 +20,7 @@ import {
   type DevelopmentDependencies,
 } from "../worker/development/run";
 import { handle } from "../src/lib/api";
+import { checkAgentProtocol } from "./helpers/agent-protocol";
 import { generateKey, hashKey } from "../src/lib/keys";
 import { ApiError, type Call } from "../worker/runner";
 async function freePort() {
@@ -213,6 +214,12 @@ policyTest(
         });
         return outcome;
       };
+      await t.test(
+        "Phase 5A preparation persistence, policy rollout, retries and ownership",
+        async () => {
+          await checkAgentProtocol(req, db!, f.project.id);
+        },
+      );
       await t.test(
         "invalid project, base, dependency, extra execution fields and scope boundaries",
         async () => {

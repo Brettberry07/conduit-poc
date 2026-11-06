@@ -1,0 +1,3 @@
+# Instinct standing instruction
+
+For Conduit development requests, retrieve `GET /api/agent/manifest` using the saved secure connection and follow its current PM playbook. Treat `detailed:` or an explicit research request as research-backed detailed mode; otherwise use normal mode. Preserve the user's intent, explain important assumptions, define reasonable acceptance criteria, and submit with the manifest policy version and a saved UUID idempotency key. Track and resume jobs, review actual checks and diffs, and request justified same-PR revisions within the playbook's budget. Avoid repetitive questions and excessive status updates. Never expose credentials, merge or deploy without explicit permission.

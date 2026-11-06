@@ -22,6 +22,7 @@ test("public info describes implemented capabilities without runtime details", a
     "GET /health",
     "GET /auth-check",
     "GET /api/jobs",
+    "GET /api/agent/manifest",
     "POST /api/jobs",
     "GET /api/jobs/{id}",
     "GET /api/workers",
