@@ -483,6 +483,241 @@ test(
         assert.equal(listed.jobs[0].claim_token, undefined);
       });
       await t.test(
+        "concurrent workers enforce four live leases per owner and release terminal slots",
+        { timeout: 20000 },
+        async () => {
+          await reset();
+          const jobs = await Promise.all(
+            Array.from({ length: 8 }, () => create()),
+          );
+          const liveCount = async () => {
+            const {
+              rows: [row],
+            } = await pool.query(
+              "SELECT count(*)::int AS count FROM orchestrator.jobs WHERE submitter_id='submitter' AND status='running' AND lease_expires_at>clock_timestamp()",
+            );
+            return row.count as number;
+          };
+          // Both identities must reach the transaction on distinct connections
+          // before either can take the fresh claim-statement snapshot.
+          const gate = await pool.connect();
+          await gate.query("BEGIN");
+          await gate.query(
+            "SELECT pg_advisory_xact_lock(hashtext('conduit-claim'))",
+          );
+          let peak = 0;
+          const storm = Promise.allSettled(
+            Array.from({ length: 12 }, async (_, i) => {
+              const result = await (i % 2 ? worker : worker2)("/api/claim", {});
+              const count = await liveCount();
+              peak = Math.max(peak, count);
+              assert.ok(count <= 4, `observed ${count} live leases`);
+              return result;
+            }),
+          );
+          let waiting = 0;
+          try {
+            const deadline = Date.now() + 5000;
+            while (Date.now() < deadline) {
+              const {
+                rows: [row],
+              } = await pool.query(
+                "SELECT count(DISTINCT pid)::int AS count FROM pg_stat_activity WHERE usename='conduit_test_runtime' AND wait_event='advisory'",
+              );
+              waiting = row.count;
+              if (waiting >= 2) break;
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+          } finally {
+            await gate.query("ROLLBACK");
+            gate.release();
+            await storm;
+          }
+          assert.ok(
+            waiting >= 2,
+            "claimers must overlap on separate database connections",
+          );
+          const claimed = (await storm).flatMap((result) => {
+            assert.equal(
+              result.status,
+              "fulfilled",
+              result.status === "rejected"
+                ? String(result.reason)
+                : "claim completed",
+            );
+            return result.value.job ? [result.value.job] : [];
+          });
+          assert.equal(claimed.length, 4);
+          assert.equal(new Set(claimed.map((job) => job.id)).size, 4);
+          assert.equal(peak, 4);
+          assert.equal(await liveCount(), 4);
+          assert.equal((await worker("/api/claim", {})).job, null);
+
+          const otherResponse = await req("/jobs", "other", "POST", {
+            title: "Another owner's slot",
+            task: "simulate-development",
+          });
+          assert.equal(otherResponse.status, 201);
+          const other = (await otherResponse.json()).job;
+          assert.equal((await worker2("/api/claim", {})).job.id, other.id);
+          assert.equal(await liveCount(), 4);
+
+          const seen = new Set(claimed.map((job) => job.id));
+          const active = [...claimed];
+          for (let i = 0; i < jobs.length - claimed.length; i++) {
+            const finished = active.shift()!;
+            await (finished.worker_id === "worker" ? worker : worker2)(
+              `/api/jobs/${finished.id}/report`,
+              {
+                claim_token: finished.claim_token,
+                action: "completed",
+                result: {},
+              },
+            );
+            assert.equal(await liveCount(), 3);
+            const next = (await worker("/api/claim", {})).job;
+            assert.ok(next, "a terminal report must immediately free a slot");
+            assert.ok(
+              !seen.has(next.id),
+              "each queued job has one distinct claim",
+            );
+            seen.add(next.id);
+            active.push(next);
+            assert.equal(await liveCount(), 4);
+          }
+          assert.deepEqual([...seen].sort(), jobs.map((job) => job.id).sort());
+          assert.equal((await worker2("/api/claim", {})).job, null);
+        },
+      );
+      await t.test(
+        "expired leases do not consume slots and reclamation still requires a free live slot",
+        async () => {
+          await reset();
+          for (let i = 0; i < 6; i++) await create();
+          const claims = [];
+          for (let i = 0; i < 4; i++)
+            claims.push((await worker("/api/claim", {})).job);
+          assert.equal((await worker2("/api/claim", {})).job, null);
+          const expired = claims[0];
+          await pool.query(
+            "UPDATE orchestrator.jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+            [expired.id],
+          );
+          const reclaimed = (await worker2("/api/claim", {})).job;
+          assert.equal(reclaimed.id, expired.id);
+          assert.equal(reclaimed.attempt_count, 2);
+          assert.notEqual(reclaimed.claim_token, expired.claim_token);
+          const {
+            rows: [row],
+          } = await pool.query(
+            "SELECT count(*)::int AS count FROM orchestrator.jobs WHERE status='running' AND lease_expires_at>clock_timestamp()",
+          );
+          assert.equal(row.count, 4);
+          assert.equal((await worker("/api/claim", {})).job, null);
+        },
+      );
+      await t.test(
+        "the owner cap preserves prerequisite merge gating and failure blocking",
+        async () => {
+          await reset();
+          const projectId = randomUUID();
+          await pool.query(
+            `INSERT INTO orchestrator.projects(id,name,repository_owner,repository_name,repository_url,default_branch,allowed_base_branches)
+             VALUES($1,'Cap dependencies','example',$2,'https://github.com/example/cap','main',ARRAY['main'])`,
+            [projectId, `cap-${projectId}`],
+          );
+          const submit = async (dependencies: string[] = []) => {
+            const response = await req("/jobs", "submitter", "POST", {
+              title: "Cap dependency",
+              task: "development",
+              project_id: projectId,
+              instructions: "Exercise dependency gating",
+              dependency_job_ids: dependencies,
+            });
+            assert.equal(response.status, 201);
+            return (await response.json()).job;
+          };
+          const pullRequest = {
+            number: 1,
+            url: "https://github.com/example/cap/pull/1",
+            draft: true,
+            state: "open",
+            merged: false,
+          };
+          const prerequisite = await submit();
+          // A successfully executed prerequisite still needs GitHub merge reconciliation.
+          await pool.query(
+            "UPDATE orchestrator.jobs SET status='completed',completed_at=clock_timestamp() WHERE id=$1",
+            [prerequisite.id],
+          );
+          await pool.query(
+            "UPDATE orchestrator.development_tasks SET pull_request=$2 WHERE job_id=$1",
+            [prerequisite.id, pullRequest],
+          );
+          const waiting = await submit([prerequisite.id]);
+          assert.equal(waiting.status, "waiting_dependencies");
+          const active = [];
+          for (let i = 0; i < 4; i++) {
+            await create();
+            active.push((await worker("/api/claim", {})).job);
+          }
+          assert.equal((await worker2("/api/claim", {})).job, null);
+          const finished = active[0];
+          await worker(`/api/jobs/${finished.id}/report`, {
+            claim_token: finished.claim_token,
+            action: "completed",
+            result: {},
+          });
+          assert.equal((await worker2("/api/claim", {})).job, null);
+          assert.equal(
+            (await (await req(`/jobs/${waiting.id}`)).json()).job.status,
+            "waiting_dependencies",
+          );
+          await worker("/api/development/reconcile", {
+            root_job_id: prerequisite.id,
+            pull_request: { ...pullRequest, state: "closed", merged: true },
+          });
+          const promoted = (await worker2("/api/claim", {})).job;
+          assert.equal(promoted.id, waiting.id);
+          await worker2(`/api/jobs/${promoted.id}/report`, {
+            claim_token: promoted.claim_token,
+            action: "completed",
+            result: {},
+          });
+          // Fill the fourth live slot again. Maintenance must still block bad edges
+          // even though no new lease can be granted to this owner.
+          await create();
+          assert.ok((await worker("/api/claim", {})).job);
+          for (const outcome of [
+            "failed",
+            "blocked",
+            "closed_unmerged",
+          ] as const) {
+            const root = await submit();
+            const dependent = await submit([root.id]);
+            await pool.query(
+              "UPDATE orchestrator.jobs SET status=$2,completed_at=clock_timestamp() WHERE id=$1",
+              [root.id, outcome === "closed_unmerged" ? "completed" : outcome],
+            );
+            if (outcome === "closed_unmerged") {
+              await pool.query(
+                "UPDATE orchestrator.development_tasks SET pull_request=$2 WHERE job_id=$1",
+                [root.id, pullRequest],
+              );
+              await worker("/api/development/reconcile", {
+                root_job_id: root.id,
+                pull_request: { ...pullRequest, state: "closed" },
+              });
+            }
+            assert.equal((await worker2("/api/claim", {})).job, null);
+            assert.equal(
+              (await (await req(`/jobs/${dependent.id}`)).json()).job.status,
+              "blocked",
+            );
+          }
+        },
+      );
+      await t.test(
         "SKIP LOCKED claims another job while oldest is locked",
         async () => {
           await reset();
@@ -604,7 +839,7 @@ test(
         "worker resumes journal after network failure and restart",
         async () => {
           await reset();
-          await create();
+          const created = await create();
           const state = join(dir, "worker-restart");
           let calls = 0;
           const flaky: Call = async (path, body) => {
@@ -614,11 +849,13 @@ test(
           };
           await assert.rejects(cycle(flaky, state, async () => {}));
           const saved = JSON.parse(
-            await readFile(join(state, "journal.json"), "utf8"),
+            await readFile(join(state, `journal-${created.id}.json`), "utf8"),
           );
           assert.ok(saved.job.claim_token);
           await cycle(worker, state, async () => {});
-          await assert.rejects(readFile(join(state, "journal.json")));
+          await assert.rejects(
+            readFile(join(state, `journal-${created.id}.json`)),
+          );
           const jobs = (await (await req("/jobs")).json()).jobs;
           assert.equal(jobs[0].status, "completed");
           assert.equal(jobs[0].attempt_count, 1);
@@ -655,7 +892,7 @@ test(
         "restarted stale worker drops journal without executing task",
         async () => {
           await reset();
-          await create();
+          const created = await create();
           const state = join(dir, "stale");
           await assert.rejects(
             cycle(
@@ -676,7 +913,9 @@ test(
             steps++;
           });
           assert.equal(steps, 0);
-          await assert.rejects(readFile(join(state, "journal.json")));
+          await assert.rejects(
+            readFile(join(state, `journal-${created.id}.json`)),
+          );
         },
       );
       await t.test(
@@ -705,10 +944,16 @@ test(
         "private tables have RLS and no public schema permissions",
         async () => {
           const { rows } = await pool.query(
-            `SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='orchestrator' AND c.relkind='r'`,
+            `SELECT c.relname,relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='orchestrator' AND c.relkind='r'`,
           );
-          assert.equal(rows.length, 7);
-          assert.ok(rows.every((r) => r.relrowsecurity));
+          assert.equal(rows.length, 8);
+          assert.ok(rows.some((r) => r.relname === "auth_users"));
+          for (const row of rows)
+            assert.equal(
+              row.relrowsecurity,
+              true,
+              `${row.relname} must enable RLS`,
+            );
           await pool.query("CREATE ROLE poc_untrusted NOLOGIN");
           await pool.query("GRANT poc_untrusted TO postgres");
           const connection = await pool.connect();

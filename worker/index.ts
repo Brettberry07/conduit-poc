@@ -1,7 +1,9 @@
 import { readFile, mkdir, open, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { ApiError, cycle, log } from "./runner";
+import { log } from "./runner";
+import { maxAgents, supervise } from "./supervisor";
 import { apiOrigin, workerClient } from "./client";
+const limit = maxAgents(process.env.CONDUIT_MAX_AGENTS);
 const base = apiOrigin(
   process.env.CONDUIT_API_URL ??
     process.env.ORCHESTRATOR_URL ??
@@ -42,9 +44,7 @@ process.on("SIGTERM", () => {
 });
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const call = workerClient(base, credential.token);
-log("started", { worker_id: credential.principal });
-let backoff = 1000;
-let lastReconciliation = 0;
+log("started", { worker_id: credential.principal, max_agents: limit });
 try {
   // Bind persistent recovery state to its API origin; never send old claim tokens to another host.
   const binding = join(dir, "origin");
@@ -63,34 +63,17 @@ try {
         "Worker state belongs to another API origin. Use a separate WORKER_STATE_DIR.",
       );
   }
-  while (!stop) {
-    try {
-      if (Date.now() - lastReconciliation > 30000) {
-        const { reconcileDevelopment } = await import("./development/run");
-        try {
-          await reconcileDevelopment(call);
-        } catch {
-          log("github_reconciliation_pending");
-        }
-        lastReconciliation = Date.now();
-      }
-      await cycle(call, dir, wait, () => stop);
-      backoff = 1000;
-      if (!stop) await wait(2000);
-    } catch (e) {
-      log("retry", {
-        error:
-          e instanceof ApiError ? e.message : "Network or local state error",
-        delay_ms: backoff,
-      });
-      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-        process.exitCode = 1;
-        break;
-      }
-      if (!stop) await wait(backoff);
-      backoff = Math.min(backoff * 2, 10000);
-    }
-  }
+  await supervise({
+    call,
+    stateDir: dir,
+    limit,
+    wait,
+    stopping: () => stop,
+    reconcile: async () => {
+      const { reconcileDevelopment } = await import("./development/run");
+      await reconcileDevelopment(call);
+    },
+  });
 } finally {
   await rm(join(dir, "lock"), { force: true });
   log("stopped");

@@ -34,18 +34,19 @@ test(
     await new Promise<void>((r) => portServer.listen(0, "127.0.0.1", r));
     const port = (portServer.address() as any).port;
     await new Promise<void>((r) => portServer.close(() => r()));
+    const password = randomBytes(24).toString("hex");
     const postgres = new EmbeddedPostgres({
       databaseDir: join(dir, "db"),
       port,
       user: "postgres",
-      password: randomBytes(24).toString("hex"),
+      password,
       persistent: false,
       autoRehydrateSymlinks: true,
       postgresFlags: ["-h", "127.0.0.1"],
       onLog: () => {},
       onError: () => {},
     });
-    let db: pg.Client | undefined, worker: ChildProcess | undefined;
+    let db: pg.Pool | undefined, worker: ChildProcess | undefined;
     let logs = "";
     let progressReports = 0;
     let interruptedAttempt: string | undefined;
@@ -60,7 +61,10 @@ test(
           ++progressReports === 2
         ) {
           interruptedAttempt = JSON.parse(
-            await readFile(join(dir, "worker-state/journal.json"), "utf8"),
+            await readFile(
+              join(dir, `worker-state/journal-${req.url!.split("/")[3]}.json`),
+              "utf8",
+            ),
           ).attempt_dir;
           res.writeHead(503);
           res.end("{}");
@@ -91,8 +95,13 @@ test(
     try {
       await postgres.initialise();
       await postgres.start();
-      db = postgres.getPgClient();
-      await db.connect();
+      db = new pg.Pool({
+        host: "127.0.0.1",
+        port,
+        user: "postgres",
+        password,
+        database: "postgres",
+      });
       for (const file of (await readdir("supabase/migrations")).sort())
         await db.query(
           await readFile(join("supabase/migrations", file), "utf8"),
@@ -199,7 +208,10 @@ test(
         if (scenario === "failure") {
           await pause(3500);
           restartedAttempt = JSON.parse(
-            await readFile(join(dir, "worker-state/journal.json"), "utf8"),
+            await readFile(
+              join(dir, `worker-state/journal-${created.id}.json`),
+              "utf8",
+            ),
           ).attempt_dir;
           const crashed = worker!;
           const exited = new Promise<void>((r) =>

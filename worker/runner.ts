@@ -1,4 +1,11 @@
-import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  writeFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { join } from "node:path";
 export type ClaimedJob = {
   id: string;
@@ -32,30 +39,95 @@ export const log = (event: string, fields: Record<string, unknown> = {}) =>
   console.log(
     JSON.stringify({ time: new Date().toISOString(), event, ...fields }),
   );
+const journalRefusal = () =>
+  Error("Cannot read journal; refusing to discard recovery state");
+
+async function readJournal(path: string): Promise<Journal> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8"));
+    if (
+      !value ||
+      !value.job ||
+      typeof value.job.id !== "string" ||
+      !value.job.id ||
+      typeof value.job.claim_token !== "string" ||
+      !value.job.claim_token ||
+      ![
+        "simulate-development",
+        "simulate-failure",
+        "codex_task",
+        "development",
+      ].includes(value.job.task) ||
+      (value.attempt_dir !== undefined &&
+        typeof value.attempt_dir !== "string") ||
+      (value.outcome !== undefined &&
+        (!value.outcome ||
+          !["completed", "failed", "blocked"].includes(value.outcome.action) ||
+          typeof value.outcome.progress !== "number"))
+    )
+      throw journalRefusal();
+    return value;
+  } catch {
+    throw journalRefusal();
+  }
+}
+
+// Validate all recovery files before execution, including the previous format.
+export async function recoverJournals(stateDir: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(stateDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw journalRefusal();
+  }
+  const paths = names
+    .filter(
+      (name) => name === "journal.json" || /^journal-.+\.json$/.test(name),
+    )
+    .sort()
+    .map((name) => join(stateDir, name));
+  const ids = new Set<string>();
+  for (const path of paths) {
+    const { job } = await readJournal(path);
+    if (ids.has(job.id)) throw journalRefusal();
+    ids.add(job.id);
+  }
+  return paths;
+}
+
 export async function cycle(
   call: Call,
   stateDir: string,
   wait: (ms: number) => Promise<void>,
   stopping: () => boolean = () => false,
+  journalPath?: string | null,
+  onJournal?: (path: string) => void,
 ) {
+  if (stopping()) return false;
+  let path =
+    journalPath === undefined
+      ? (await recoverJournals(stateDir))[0]
+      : (journalPath ?? undefined);
   await call("/api/heartbeat", {});
-  const path = join(stateDir, "journal.json");
   let journal: Journal;
-  try {
-    journal = JSON.parse(await readFile(path, "utf8"));
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT")
-      throw Error("Cannot read journal; refusing to discard recovery state");
+  if (path) {
+    journal = await readJournal(path);
+    onJournal?.(path);
+  } else {
+    if (stopping()) return false;
     const { job } = await call("/api/claim", {});
     if (!job) return false;
     journal = { job };
+    path = join(stateDir, `journal-${encodeURIComponent(job.id)}.json`);
+    onJournal?.(path);
     await save(journal);
     log("claimed", { job_id: job.id });
   }
   async function save(value: Journal) {
     await mkdir(stateDir, { recursive: true, mode: 0o700 });
     await writeFile(path + ".tmp", JSON.stringify(value), { mode: 0o600 });
-    await rename(path + ".tmp", path);
+    await rename(path + ".tmp", path!);
   }
   const { job } = journal;
   const report = (value: unknown) =>
@@ -132,12 +204,12 @@ export async function cycle(
     }
     await report(journal.outcome);
     log(journal.outcome.action, { job_id: job.id });
-    await rm(path, { force: true });
+    await rm(path!, { force: true });
     return true;
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
       log("lease_lost", { job_id: job.id });
-      await rm(path, { force: true });
+      await rm(path!, { force: true });
       return false;
     }
     throw e;

@@ -7,6 +7,38 @@ export interface DB {
     values?: unknown[],
   ): Promise<{ rows: any[]; rowCount: number | null }>;
 }
+export interface DBConnection extends DB {
+  release(error?: Error | boolean): void;
+}
+export interface PooledDB extends DB {
+  connect(): Promise<DBConnection>;
+}
+export async function transaction<T>(
+  db: DB,
+  run: (connection: DBConnection) => Promise<T>,
+): Promise<T> {
+  const pooled = db as Partial<PooledDB>;
+  if (!pooled.connect) throw Error("A pooled database connection is required");
+  const connection = await pooled.connect();
+  let rollbackError: Error | undefined;
+  try {
+    await connection.query("BEGIN");
+    const result = await run(connection);
+    await connection.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await connection.query("ROLLBACK");
+    } catch (failure) {
+      // Discard a connection whose transaction state could not be cleared.
+      rollbackError =
+        failure instanceof Error ? failure : new Error("Rollback failed");
+    }
+    throw error;
+  } finally {
+    connection.release(rollbackError);
+  }
+}
 // Never include credentials in errors; pg connection strings may contain URL-encoded passwords.
 export function poolConfig(
   connectionString: string,

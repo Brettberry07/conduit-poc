@@ -7,7 +7,8 @@ export function info(request: Request): Response {
     architecture: {
       api: "Authenticated HTTP job API hosted on Vercel using Next.js",
       queue: "Supabase PostgreSQL persistent job queue",
-      worker: "Local outbound worker that claims and executes jobs",
+      worker:
+        "Local outbound worker executing up to CONDUIT_MAX_AGENTS jobs concurrently (default 4, integers 1–4), one job per agent. The server enforces at most 4 running jobs with live leases per owner (submitter_id), across worker processes and identities. The server bounds leased jobs; each worker's agent limit controls physical execution concurrency. Expired leases do not count, and abandoned local processes remain governed by lease fencing and recovery.",
     },
     task_types: [
       "simulate-development",
@@ -34,6 +35,7 @@ export function info(request: Request): Response {
       "Verification checks",
       "Draft pull requests",
       "Same-PR revisions",
+      "Dependencies become done only when every prerequisite pull request is merged",
       "Changes, diff, and publication retrieval",
     ],
     descriptor_status:

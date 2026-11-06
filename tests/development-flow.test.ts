@@ -708,7 +708,13 @@ policyTest(
         async () => {
           const dependent = await submit({ dependency_job_ids: [root.id] });
           assert.equal(dependent.status, "waiting_dependencies");
-          assert.equal((await call("/api/claim", {})).job, null);
+          assert.ok(
+            (
+              await Promise.all(
+                Array.from({ length: 4 }, () => call("/api/claim", {})),
+              )
+            ).every(({ job }) => job === null),
+          );
           // Reconciliation, not successful execution, opens this gate.
           await call("/api/development/reconcile", {
             root_job_id: root.id,
@@ -728,6 +734,54 @@ policyTest(
             action: "blocked",
             error: "End test",
           });
+          for (const action of [
+            "failed",
+            "blocked",
+            "closed_unmerged",
+          ] as const) {
+            const prerequisite = await submit();
+            const waiting = await submit({
+              dependency_job_ids: [prerequisite.id],
+            });
+            const claims = await Promise.all(
+              Array.from({ length: 4 }, () => call("/api/claim", {})),
+            );
+            assert.deepEqual(
+              claims.flatMap(({ job }) => (job ? [job.id] : [])),
+              [prerequisite.id],
+            );
+            const active = claims.find(({ job }) => job)?.job;
+            if (action === "closed_unmerged") {
+              const pullRequest = {
+                number: 43,
+                url: "https://github.com/example/disposable/pull/43",
+                draft: true,
+                state: "open",
+                merged: false,
+                head: fake.pr.head.sha,
+              };
+              await call(`/api/jobs/${active.id}/publication`, {
+                claim_token: active.claim_token,
+                pull_request: pullRequest,
+              });
+              await call("/api/development/reconcile", {
+                root_job_id: prerequisite.id,
+                pull_request: { ...pullRequest, state: "closed" },
+              });
+            }
+            await call(`/api/jobs/${active.id}/report`, {
+              claim_token: active.claim_token,
+              action: action === "closed_unmerged" ? "completed" : action,
+              ...(action === "closed_unmerged"
+                ? { result: {} }
+                : { error: "Prerequisite unavailable" }),
+            });
+            assert.equal((await call("/api/claim", {})).job, null);
+            assert.equal(
+              (await (await req(`/api/jobs/${waiting.id}`)).json()).job.status,
+              "blocked",
+            );
+          }
           const disabled = await submit();
           const { job: activeDisabled } = await call("/api/claim", {});
           assert.equal(activeDisabled.id, disabled.id);
