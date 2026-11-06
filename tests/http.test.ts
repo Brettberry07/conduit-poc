@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { applyMigrations } from "../scripts/migrations";
+import { examplePlan } from "./helpers/initiatives";
 import { poolConfig } from "../src/lib/db";
 import { apiOrigin } from "../worker/client";
 const exec = promisify(execFile);
@@ -114,7 +115,7 @@ test(
         )
       ).rows[0];
       const applied = await applyMigrations(admin, true);
-      assert.equal(applied.length, 8);
+      assert.equal(applied.length, 9);
       assert.deepEqual(await applyMigrations(admin), []);
       assert.ok(
         (await admin.query("SELECT revoked_at FROM orchestrator.api_keys"))
@@ -478,6 +479,104 @@ test(
           assert.equal(
             (await request("/api/jobs", undefined, next.token)).status,
             200,
+          );
+        },
+      );
+      await t.test(
+        "initiative draft, PATCH plan, atomic activation and resume over real Next HTTP",
+        async () => {
+          const token = JSON.parse(
+            await readFile(join(dir, "rotated.json"), "utf8"),
+          ).token;
+          const api = async (
+            path: string,
+            method = "GET",
+            body?: unknown,
+            key = randomUUID(),
+          ) =>
+            fetch(origin + path, {
+              method,
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "Idempotency-Key": key,
+              },
+              ...(body ? { body: JSON.stringify(body) } : {}),
+              signal: AbortSignal.timeout(15000),
+            });
+          const project = randomUUID();
+          await admin!.query(
+            `INSERT INTO orchestrator.projects(id,name,repository_owner,repository_name,repository_url,default_branch,allowed_base_branches) VALUES($1,'Initiative HTTP fixture','example','http-fixture','https://github.com/example/http-fixture.git','main',ARRAY['main'])`,
+            [project],
+          );
+          const manifest = await (await api("/api/agent/manifest")).json();
+          const plan = examplePlan(project),
+            creationKey = randomUUID();
+          const first = await api(
+            "/api/initiatives",
+            "POST",
+            { plan, policy_version: manifest.policy_version },
+            creationKey,
+          );
+          assert.equal(first.status, 201, await first.clone().text());
+          const id = (await first.json()).initiative.id,
+            path = `/api/initiatives/${id}`;
+          const edit = await api(path + "/plan", "PATCH", {
+            expected_plan_version: 1,
+            plan: { ...plan, description: "HTTP edited" },
+          });
+          assert.equal(edit.status, 200, await edit.clone().text());
+          assert.equal(
+            (await (await api(path + "/plan")).json()).plan_version,
+            2,
+          );
+          const key = randomUUID(),
+            body = {
+              expected_plan_version: 2,
+              policy_version: manifest.policy_version,
+            };
+          const activation = await api(path + "/activate", "POST", body, key);
+          assert.equal(activation.status, 201, await activation.clone().text());
+          const jobs = (await activation.json()).jobs;
+          assert.equal(jobs.length, 4);
+          assert.deepEqual(
+            (await (await api(path + "/activate", "POST", body, key)).json())
+              .jobs,
+            jobs,
+          );
+          const resume = await (await api(path + "/resume")).json();
+          assert.equal(resume.progress.queued, 2);
+          assert.equal(resume.progress.waiting_dependencies, 2);
+          assert.equal(
+            resume.initiative.original_request,
+            plan.original_request,
+          );
+          const pause = await api(path, "PATCH", {
+            expected_status: "active",
+            status: "paused",
+          });
+          assert.equal(pause.status, 200);
+          assert.equal(
+            (await (await api(path + "/resume")).json()).dispatch.enabled,
+            false,
+          );
+          assert.equal(
+            (
+              await api(path, "PATCH", {
+                expected_status: "paused",
+                status: "cancelled",
+              })
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await admin!.query(
+                "SELECT count(*)::int AS n FROM orchestrator.jobs WHERE project_id=$1",
+                [project],
+              )
+            ).rows[0].n,
+            4,
           );
         },
       );

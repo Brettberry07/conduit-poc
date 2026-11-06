@@ -35,6 +35,7 @@ export function info(request: Request): Response {
       "Verification checks",
       "Draft pull requests",
       "Same-PR revisions",
+      "Persistent single-project initiatives, versioned draft plans, atomic activation, progress, PM assessments and resume",
       "Dependencies become done only when every prerequisite pull request is merged",
       "Changes, diff, and publication retrieval",
       "Versioned agent manifest and PM playbook; normal and research-backed detailed preparation",
@@ -71,6 +72,16 @@ export function info(request: Request): Response {
       "POST /api/jobs/{id}/artifacts",
       "POST /api/development/pending",
       "POST /api/development/reconcile",
+      "GET /api/initiatives",
+      "POST /api/initiatives",
+      "GET /api/initiatives/{id}",
+      "PATCH /api/initiatives/{id}",
+      "GET /api/initiatives/{id}/plan",
+      "PATCH /api/initiatives/{id}/plan",
+      "POST /api/initiatives/{id}/activate",
+      "GET /api/initiatives/{id}/resume",
+      "GET /api/initiatives/{id}/reviews",
+      "POST /api/initiatives/{id}/reviews",
     ].map((endpoint) => {
       const [method, path] = endpoint.split(" ");
       const scope = requiredScope(path, method);

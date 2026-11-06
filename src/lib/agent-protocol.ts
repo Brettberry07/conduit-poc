@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import {
+  initiativePlan,
+  reviewInput,
+  lifecycleInput,
+  editInitiative,
+  activationInput,
+} from "./initiatives";
 import { DevelopmentError } from "./development";
 import {
   DEVELOPMENT_BODY_LIMIT,
@@ -11,7 +18,7 @@ import {
 // capabilities, excluding only runtime enforcement state and the hash itself.
 export const protocol = {
   service: "Conduit",
-  protocol_version: "5a.1",
+  protocol_version: "5b.1",
   description:
     "Scoped development orchestration with local coding, verification and draft PR review",
   supported_task_types: [
@@ -35,8 +42,25 @@ export const protocol = {
     executions: "GET /api/jobs/{id}/executions",
     revisions: "POST /api/jobs/{id}/revisions",
     revision_history: "GET /api/jobs/{id}/revisions",
+    initiatives: "GET /api/initiatives",
+    create_initiative: "POST /api/initiatives",
+    initiative: "GET /api/initiatives/{id}",
+    initiative_lifecycle: "PATCH /api/initiatives/{id}",
+    initiative_plan: "GET /api/initiatives/{id}/plan",
+    edit_plan: "PATCH /api/initiatives/{id}/plan",
+    activate: "POST /api/initiatives/{id}/activate",
+    resume: "GET /api/initiatives/{id}/resume",
+    initiative_reviews: "GET /api/initiatives/{id}/reviews",
+    record_assessment: "POST /api/initiatives/{id}/reviews",
   },
   capabilities: {
+    initiatives: {
+      maximum_tasks: 20,
+      maximum_dependency_depth: 10,
+      request_bytes: 524288,
+      repositories_per_initiative: 1,
+      active_plan_edits: false,
+    },
     external_scopes: ["jobs:read", "jobs:create", "jobs:revise"],
     maximum_active_agents_per_owner: 4,
     dependency_readiness: "Earlier PRs must be merged, not merely completed",
@@ -67,6 +91,13 @@ export const protocol = {
       "URLs must use HTTP(S), without username/password or credential query parameters. Never include credentials in any field. URL syntax and provenance fields do not verify claims or actual access.",
     ],
   },
+  initiative_contract: {
+    plan_schema: z.toJSONSchema(initiativePlan),
+    review_schema: z.toJSONSchema(reviewInput),
+    lifecycle_schema: z.toJSONSchema(lifecycleInput),
+    edit_schema: z.toJSONSchema(editInitiative),
+    activation_schema: z.toJSONSchema(activationInput),
+  },
   policy: {
     field: "policy_version",
     legacy_identification:
@@ -94,7 +125,23 @@ export const protocol = {
       "Select an enabled project from /api/projects using the user's context. Inspect project metadata and repository context through available authorized tools; do not imply repository source browsing is available from Conduit. Ask a concise question only when project identity or a consequential requirement cannot be inferred safely.",
       "Preserve the user's original request in original_request, separately from actionable instructions, assumptions and research recommendations. Explain important assumptions without repetitive questions or excessive status messages.",
       "Define concrete scope, preserved behavior and observable acceptance criteria. For small tasks prefer one job. For larger work understand architecture, identify independent work and dependencies, prepare a concise plan, submit without unnecessary fragmentation, then review before proceeding.",
-      "One independent task corresponds to one job and feature branch. Up to four independent jobs may execute concurrently. Dependent jobs cannot use unmerged changes; supply existing owned root dependency_job_ids in the same project/base branch. Persistent initiatives are outside this protocol.",
+      "One independent task corresponds to one job and feature branch. Up to four independent jobs may execute concurrently. Dependent jobs cannot use unmerged changes; supply existing owned root dependency_job_ids in the same project/base branch. For substantial multi-task objectives, persist an initiative before execution; resume it from durable records.",
+    ],
+    initiatives: [
+      "Instinct owns planning and judgment; Conduit owns persistence, validation and orchestration. Use one initiative for a substantial objective with multiple appropriately scoped tasks in one enabled registered project. Use a standalone development job for small changes; there is no internal planning model.",
+      "Inspect project context, define goal and overall acceptance criteria, preserve original_request, and POST /api/initiatives with {plan:{project_id,title,description,original_request,goal,acceptance_criteria,development_mode,research?,base_branch?,tasks:[{task_key,title,description,instructions,acceptance_criteria,development_mode,research?,dependencies:[]}]},policy_version}. Save the initiative ID and stable UUID Idempotency-Key. Draft creation starts no jobs.",
+      "Task keys are unique stable lowercase identifiers, maximum 64 characters. Preserve keys for retained tasks across draft revisions. Use only necessary dependencies within this initiative; no missing, self, duplicate or cyclic edges. At most 20 tasks and 10 tasks along a dependency path. Array order is display order, not an implicit dependency.",
+      "Avoid excessive fragmentation and parallel jobs editing tightly coupled files or architecture. Independent branches can conflict; sequence coupled edits deliberately. There is no automatic cherry-pick, rebase, merge or branch stacking.",
+      "GET /api/initiatives/{id}/plan to inspect. PATCH that endpoint with {expected_plan_version,plan,explanation?} for full draft replacement. Versions increment; 409 means re-read before editing. GET plan?version=N for accepted historical snapshots. Project identity cannot change; submitted plans are immutable. Code changes use existing same-PR revisions.",
+      "Planning-only requests authorize a draft. Requests to build and handle implementation may authorize activation. POST /api/initiatives/{id}/activate with {expected_plan_version,policy_version} and a saved UUID. Atomic activation returns task_key/root_job_id mappings. Keep the accepted key/body for retries; different keys after activation receive 409 and must read existing task links, never submit duplicates. Implementation authorization never authorizes merge or deploy.",
+      "Each task deliberately chooses normal or detailed mode, independent of initiative mode. Detailed tasks need their own valid Phase 5A research brief with actual sources and provenance. Select relevant research; initiative research is retained on the plan, never automatically copied to every job. Insufficient research is rejected, never fabricated.",
+      "Activation maps task dependencies to real root dependency_job_ids. The existing queue/worker owns concurrency (up to four). Draft PR publication does not unlock prerequisites; their PRs must be observed merged into the approved base branch. Report waiting_on and blocking_reason honestly.",
+      "For a new conversation or a status request, list owned initiatives, identify the objective and GET /api/initiatives/{id}/resume. Reconstruct original intent, current version, tasks, dependencies, job IDs, failures, assessments and unresolved decisions without conversational memory. Retrieve the linked plan and existing job/changes/diff/publication/executions endpoints only as needed; resume omits logs and complete diffs.",
+      "Distinguish lifecycle (draft,active,paused,completed,cancelled) from execution progress. PATCH the initiative with {expected_status,status} to pause/resume/cancel. Pausing and cancellation stop new dispatch including revisions and expired-lease retries; running processes retain their existing leases and may finish. Do not create duplicate jobs to bypass these states or a disabled project.",
+      "PR state is a recorded GitHub observation with observed_at and live=false, not a live guarantee. Missing observation time means unknown freshness. Merged code still requires overall acceptance review; completion requires all tasks observed merged, no outstanding decisions and an explicit completion_summary via lifecycle PATCH. Completed status is a PM conclusion, not formal proof of acceptance. Completed/cancelled initiatives reject new code revisions, while accepted identical retries remain readable.",
+      "After inspecting actual evidence, POST /api/initiatives/{id}/reviews with its own stable UUID and {task_key,job_id,observed_head_sha?,outcome,summary,criteria_evaluated:[],evidence_references:[],outstanding_concerns:[]}. Outcomes: ready_for_human_review, revision_needed, blocked, needs_decision. These are PM assessments, never human approval or merge authority. Record the examined commit SHA; missing/mismatched SHA or later revision makes an assessment stale.",
+      "Resume includes the latest three assessment summaries per task; paginate /reviews with its next_before cursor for older history. The latest assessment supersedes earlier assessments for a task, including resolving a needs_decision assessment; preserve all history. Review the user's decision before superseding it. Request code revisions through /api/jobs/{id}/revisions and preserve the existing default budget of two autonomous attempts across conversations.",
+      "Read initiatives with jobs:read; create/activate with jobs:create; edit draft/lifecycle and record assessments with jobs:revise. Viewer and worker credentials cannot acquire PM write authority. On failures retry exact accepted UUID/body; transaction failures leave no partial task submissions.",
     ],
     modes: {
       normal:
@@ -133,7 +180,7 @@ export const protocol = {
 };
 
 export function policyVersion(content: unknown = protocol): string {
-  return `5a-${createHash("sha256").update(JSON.stringify(content)).digest("hex")}`;
+  return `5b-${createHash("sha256").update(JSON.stringify(content)).digest("hex")}`;
 }
 export function agentManifest() {
   return {

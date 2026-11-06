@@ -39,6 +39,24 @@ export async function authenticate(
 }
 export function requiredScope(path: string, method: string): Scope | null {
   if (
+    /^\/api\/initiatives(?:\/[^/]+(?:\/(?:plan|activate|resume|reviews))?)?$/.test(
+      path,
+    )
+  ) {
+    if (method === "GET" && !path.endsWith("/activate")) return "jobs:read";
+    if (
+      method === "POST" &&
+      (path === "/api/initiatives" || path.endsWith("/activate"))
+    )
+      return "jobs:create";
+    if (
+      (method === "PATCH" && !/\/(?:activate|resume|reviews)$/.test(path)) ||
+      (method === "POST" && path.endsWith("/reviews"))
+    )
+      return "jobs:revise";
+    return null;
+  }
+  if (
     method === "GET" &&
     (path === "/api/agent/manifest" ||
       /^\/api\/projects(?:\/[^/]+)?$/.test(path) ||

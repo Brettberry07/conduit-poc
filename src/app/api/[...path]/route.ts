@@ -14,4 +14,4 @@ async function route(request: Request) {
     );
   }
 }
-export { route as GET, route as POST };
+export { route as GET, route as POST, route as PATCH };

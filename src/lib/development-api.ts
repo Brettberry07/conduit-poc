@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { insertDevelopmentRoot } from "./development-create";
 import { isDeepStrictEqual } from "node:util";
 import { policyVersion, requireCurrentPolicy } from "./agent-protocol";
 import { DEVELOPMENT_BODY_LIMIT } from "./research";
 import { z } from "zod";
-import type { DB } from "./db";
+import { transaction, type DB } from "./db";
 import type { Identity } from "./keys";
 import { publicColumns } from "./queue";
 import {
@@ -11,7 +11,6 @@ import {
   branchSchema,
   developmentInput,
   DevelopmentError,
-  featureBranch,
   projectColumns,
   revisionInput,
 } from "./development";
@@ -104,34 +103,12 @@ export async function developmentApi(
         "Invalid dependency; use existing owned root jobs in this project",
         400,
       );
-    const id = randomUUID();
-    const {
-      rows: [job],
-    } = await db.query(
-      `WITH created AS (INSERT INTO orchestrator.jobs(id,title,description,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch,dependency_job_ids,status,original_request,development_mode,policy_version,research,accepted_policy_version)
-   VALUES($1,$2,$3,'development',$4,$5,$6,$7,$8,$1,$9,$10,CASE WHEN cardinality($10::uuid[])>0 THEN 'waiting_dependencies' ELSE 'queued' END,$12,$13,$14,$15,$16)
-   ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING *),
-   registered AS (INSERT INTO orchestrator.development_tasks(job_id,project_id,branch,base_branch)
-    SELECT id,project_id,$11,base_branch FROM created WHERE task='development' AND root_job_id=id ON CONFLICT(job_id) DO NOTHING)
-   SELECT ${publicColumns} FROM created`,
-      [
-        id,
-        input.title,
-        input.description,
-        key.principal,
-        requestId,
-        input.instructions,
-        input.acceptance_criteria,
-        input.project_id,
-        branch,
-        input.dependency_job_ids,
-        featureBranch(id, input.title),
-        input.original_request ?? input.instructions,
-        input.development_mode,
-        input.policy_version ?? null,
-        input.research ?? null,
-        policyVersion(),
-      ],
+    const job = await insertDevelopmentRoot(
+      db,
+      key.principal,
+      requestId,
+      input,
+      branch,
     );
     if (!matches(job, branch))
       throw new DevelopmentError(
@@ -152,7 +129,7 @@ export async function developmentApi(
       .strict()
       .parse(await readBody(req));
     await db.query(
-      `UPDATE orchestrator.development_tasks SET pull_request=$2,updated_at=clock_timestamp() WHERE job_id=$1 AND pull_request->>'number'=$3 AND pull_request->>'url'=$4`,
+      `UPDATE orchestrator.development_tasks SET pull_request=$2,pull_request_observed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE job_id=$1 AND pull_request->>'number'=$3 AND pull_request->>'url'=$4`,
       [
         v.root_job_id,
         v.pull_request,
@@ -200,7 +177,7 @@ export async function developmentApi(
       const { rows } = await db.query(
         `WITH owned AS (UPDATE orchestrator.jobs SET phase=coalesce($4,phase) WHERE id=$1 AND task='development' AND worker_id=$2 AND claim_token=$3 AND status='running' AND lease_expires_at>clock_timestamp() AND EXISTS(SELECT 1 FROM orchestrator.projects p WHERE p.id=orchestrator.jobs.project_id AND p.enabled AND orchestrator.jobs.base_branch=ANY(p.allowed_base_branches)) RETURNING root_job_id,id,attempt_count),
     attempt AS (UPDATE orchestrator.execution_attempts a SET starting_commit=coalesce(a.starting_commit,$9) FROM owned o WHERE a.job_id=o.id AND a.attempt=o.attempt_count AND a.completed_at IS NULL)
-    UPDATE orchestrator.development_tasks t SET base_commit=coalesce(t.base_commit,$5),head_commit=coalesce($6,t.head_commit),pull_request=coalesce($7,t.pull_request),publication_state=coalesce($8,t.publication_state),updated_at=clock_timestamp() FROM owned o WHERE t.job_id=o.root_job_id RETURNING t.*`,
+    UPDATE orchestrator.development_tasks t SET base_commit=coalesce(t.base_commit,$5),head_commit=coalesce($6,t.head_commit),pull_request=coalesce($7,t.pull_request),publication_state=coalesce($8,t.publication_state),pull_request_observed_at=CASE WHEN $7::jsonb IS NOT NULL THEN clock_timestamp() ELSE t.pull_request_observed_at END,updated_at=clock_timestamp() FROM owned o WHERE t.job_id=o.root_job_id RETURNING t.*`,
         [
           id,
           key.principal,
@@ -270,77 +247,93 @@ export async function developmentApi(
     [job.root_job_id],
   );
   if (method === "POST" && op === "revisions") {
-    const v = revisionInput.parse(await readBody(req, DEVELOPMENT_BODY_LIMIT)),
-      requestId = z.string().uuid().parse(req.headers.get("idempotency-key"));
-    const mode = v.development_mode ?? job.development_mode;
-    const research = v.research ?? job.research;
-    const original = v.original_request ?? v.instructions;
-    const matches = (existing: any) =>
-      existing.task === "development" &&
-      existing.root_job_id === job.root_job_id &&
-      existing.id !== job.root_job_id &&
-      existing.instructions === v.instructions &&
-      existing.acceptance_criteria === v.acceptance_criteria &&
-      existing.development_mode === mode &&
-      (existing.original_request ?? existing.instructions) === original &&
-      isDeepStrictEqual(existing.research, research);
-    const {
-      rows: [existing],
-    } = await db.query(
-      `SELECT ${publicColumns} FROM orchestrator.jobs WHERE submitter_id=$1 AND request_id=$2`,
-      [key.principal, requestId],
-    );
-    if (existing) {
-      if (!matches(existing))
+    return transaction(db, async (db) => {
+      const v = revisionInput.parse(
+          await readBody(req, DEVELOPMENT_BODY_LIMIT),
+        ),
+        requestId = z.string().uuid().parse(req.headers.get("idempotency-key"));
+      const mode = v.development_mode ?? job.development_mode;
+      const research = v.research ?? job.research;
+      const original = v.original_request ?? v.instructions;
+      const matches = (existing: any) =>
+        existing.task === "development" &&
+        existing.root_job_id === job.root_job_id &&
+        existing.id !== job.root_job_id &&
+        existing.instructions === v.instructions &&
+        existing.acceptance_criteria === v.acceptance_criteria &&
+        existing.development_mode === mode &&
+        (existing.original_request ?? existing.instructions) === original &&
+        isDeepStrictEqual(existing.research, research);
+      const {
+        rows: [existing],
+      } = await db.query(
+        `SELECT ${publicColumns} FROM orchestrator.jobs WHERE submitter_id=$1 AND request_id=$2`,
+        [key.principal, requestId],
+      );
+      if (existing) {
+        if (!matches(existing))
+          throw new DevelopmentError(
+            "Idempotency key already used with different content",
+          );
+        return json({ job: existing }, 201);
+      }
+      const {
+        rows: [initiative],
+      } = await db.query(
+        `SELECT i.status FROM orchestrator.initiatives i
+      JOIN orchestrator.initiative_tasks t ON t.initiative_id=i.id
+      WHERE t.root_job_id=$1 AND i.owner=$2 FOR SHARE OF i`,
+        [job.root_job_id, key.principal],
+      );
+      if (initiative && ["completed", "cancelled"].includes(initiative.status))
+        throw new DevelopmentError(
+          "Cannot revise a completed or cancelled initiative",
+        );
+      requireCurrentPolicy(v.policy_version);
+      if (mode === "detailed" && !research)
+        throw new DevelopmentError(
+          "Detailed mode requires a cited research brief",
+          400,
+        );
+      await approvedProject(db, job.project_id, job.base_branch);
+      if (
+        task?.publication_state !== "published" ||
+        !task?.head_commit ||
+        !task.pull_request ||
+        task.pull_request.state !== "open" ||
+        task.pull_request.merged ||
+        !task.pull_request.draft
+      )
+        throw new DevelopmentError(
+          "Revision requires an open draft pull request",
+        );
+      const {
+        rows: [revision],
+      } = await db.query(
+        `INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch,original_request,development_mode,policy_version,research,accepted_policy_version)
+   VALUES($1,'development',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${publicColumns}`,
+        [
+          job.title,
+          key.principal,
+          requestId,
+          v.instructions,
+          v.acceptance_criteria,
+          job.project_id,
+          job.root_job_id,
+          job.base_branch,
+          original,
+          mode,
+          v.policy_version ?? null,
+          research,
+          policyVersion(),
+        ],
+      );
+      if (!matches(revision))
         throw new DevelopmentError(
           "Idempotency key already used with different content",
         );
-      return json({ job: existing }, 201);
-    }
-    requireCurrentPolicy(v.policy_version);
-    if (mode === "detailed" && !research)
-      throw new DevelopmentError(
-        "Detailed mode requires a cited research brief",
-        400,
-      );
-    await approvedProject(db, job.project_id, job.base_branch);
-    if (
-      task?.publication_state !== "published" ||
-      !task?.head_commit ||
-      !task.pull_request ||
-      task.pull_request.state !== "open" ||
-      task.pull_request.merged ||
-      !task.pull_request.draft
-    )
-      throw new DevelopmentError(
-        "Revision requires an open draft pull request",
-      );
-    const {
-      rows: [revision],
-    } = await db.query(
-      `INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id,instructions,acceptance_criteria,project_id,root_job_id,base_branch,original_request,development_mode,policy_version,research,accepted_policy_version)
-   VALUES($1,'development',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(submitter_id,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${publicColumns}`,
-      [
-        job.title,
-        key.principal,
-        requestId,
-        v.instructions,
-        v.acceptance_criteria,
-        job.project_id,
-        job.root_job_id,
-        job.base_branch,
-        original,
-        mode,
-        v.policy_version ?? null,
-        research,
-        policyVersion(),
-      ],
-    );
-    if (!matches(revision))
-      throw new DevelopmentError(
-        "Idempotency key already used with different content",
-      );
-    return json({ job: revision }, 201);
+      return json({ job: revision }, 201);
+    });
   }
   if (method !== "GET") return null;
   if (op === "publication") return json({ publication: task ?? null });

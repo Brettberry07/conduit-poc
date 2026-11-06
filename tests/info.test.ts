@@ -39,6 +39,16 @@ test("public info describes implemented capabilities without runtime details", a
     ),
     "POST /api/jobs/{id}/revisions",
     "POST /api/jobs/{id}/publication",
+    "GET /api/initiatives",
+    "POST /api/initiatives",
+    "GET /api/initiatives/{id}",
+    "PATCH /api/initiatives/{id}",
+    "GET /api/initiatives/{id}/plan",
+    "PATCH /api/initiatives/{id}/plan",
+    "POST /api/initiatives/{id}/activate",
+    "GET /api/initiatives/{id}/resume",
+    "GET /api/initiatives/{id}/reviews",
+    "POST /api/initiatives/{id}/reviews",
   ];
   assert.deepEqual(
     payload.endpoints

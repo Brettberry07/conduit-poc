@@ -1,6 +1,6 @@
 # Phase 5A: dynamic agent protocol
 
-Phase 5A adds a reusable project-management protocol for external assistants such as Instinct. Instinct researches and coordinates; Conduit validates and stores preparation context, executes existing coding jobs and enforces permissions. There is no internal PM model, initiative engine, event feed, scheduler, MCP server, screenshot ingestion, automatic merge or deployment.
+Phase 5A adds a reusable project-management protocol for external assistants such as Instinct. Instinct researches and coordinates; Conduit validates and stores preparation context, executes existing coding jobs and enforces permissions. There is no internal PM model, event feed, scheduler, MCP server, screenshot ingestion, automatic merge or deployment. [Phase 5B](phase-5b-initiatives.md) adds persistent initiatives around the existing execution infrastructure.
 
 ## Architecture and discovery
 
@@ -15,7 +15,7 @@ The manifest contains:
 - `playbook`: `role`, `constraints`, `interpret`, `modes`, `ui_research`, `submit`, `review`, `failures_and_decisions`, `source_trust`.
 - `policy`: acknowledgement field, current enforcement state, legacy identification and retry behavior.
 
-The embedded playbook is the single standing instruction source; there is no separate playbook endpoint. `src/lib/agent-protocol.ts` holds the manifest and instructions. Its protocol version is `5a.1`. Its policy version is `5a-` followed by a SHA-256 hash of the complete static protocol content, including the playbook and capabilities. Operational content changes change the hash. Runtime enforcement state is excluded, so enabling enforcement does not invalidate acknowledgements. No temporary project IDs, jobs, credentials or private local paths appear in it.
+The embedded playbook is the single standing instruction source; there is no separate playbook endpoint. `src/lib/agent-protocol.ts` holds the manifest and instructions. The original Phase 5A protocol version was `5a.1`; Phase 5B extends it to `5b.1` with initiative planning/resume and generated plan/review schemas. The current policy version is `5b-` followed by a SHA-256 hash of the complete static protocol content, including the playbook and capabilities. Operational content changes change the hash. Runtime enforcement state is excluded, so enabling enforcement does not invalidate acknowledgements. No temporary project IDs, jobs, credentials or private local paths appear in it.
 
 Standing instructions, platform capabilities and task-specific preparation remain separate. Matching a policy hash is a client acknowledgement, not proof the client read or followed instructions. Security restrictions continue to be enforced by existing API/worker code.
 

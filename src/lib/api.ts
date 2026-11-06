@@ -1,3 +1,4 @@
+import { initiativeApi } from "./initiative-api";
 import { developmentApi } from "./development-api";
 import { agentManifest } from "./agent-protocol";
 import { DEVELOPMENT_BODY_LIMIT } from "./research";
@@ -100,6 +101,8 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
     if (method === "GET" && path === "/api/agent/manifest")
       return json(agentManifest());
+    const initiative = await initiativeApi(req, db, key, body);
+    if (initiative) return initiative;
     const creationBody =
       method === "POST" && path === "/api/jobs"
         ? await body(req, DEVELOPMENT_BODY_LIMIT)
@@ -212,6 +215,21 @@ export async function handle(req: Request, db: DB): Promise<Response> {
   } catch (e) {
     if (e instanceof DevelopmentError)
       return json({ error: e.message }, e.status);
+    if (
+      e instanceof z.ZodError &&
+      new URL(req.url).pathname.startsWith("/api/initiatives") &&
+      e.issues.some(
+        (issue) =>
+          issue.message === "Detailed mode requires a cited research brief",
+      )
+    )
+      return json(
+        {
+          error:
+            "Detailed tasks require their own valid Phase 5A cited research brief; initiative research is not inherited",
+        },
+        400,
+      );
     if (
       e instanceof z.ZodError ||
       (e instanceof Error && e.message === "invalid-body")

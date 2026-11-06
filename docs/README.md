@@ -4,18 +4,18 @@
 
 [Read-only web console](gui.md)
 
-[Phase 5A agent protocol and rollout](phase-5a-agent-protocol.md) · [Instinct standing instruction](instinct-standing-instruction.md)
+[Phase 5B persistent initiatives](phase-5b-initiatives.md) · [Phase 5A agent protocol and rollout](phase-5a-agent-protocol.md) · [Instinct standing instruction](instinct-standing-instruction.md)
 
 ## Setup and operation
 
-| Guide                                                      | Use it for                                                                                                                    |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| [API and worker operator guide](operator-guide.md)         | Local setup, keys, API contract, lease guarantees and journal recovery                                                        |
-| [Hosted deployment](deployment.md)                         | Vercel/Supabase setup, TLS, runtime roles, cutover and rollback; includes dated deployment records                            |
+| Guide                                                   | Use it for                                                                                                                    |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| [API and worker operator guide](operator-guide.md)      | Local setup, keys, API contract, lease guarantees and journal recovery                                                        |
+| [Hosted deployment](deployment.md)                      | Vercel/Supabase setup, TLS, runtime roles, cutover and rollback; includes dated deployment records                            |
 | [Registered projects and draft PRs](PHASE_4_TESTING.md) | GitHub policy, registration, worktrees, development/revision payloads, diff review, publication recovery and operator cleanup |
 | [Fixed Codex sandbox](PHASE_3_TESTING.md)               | Codex prerequisites, TypeScript fixture, execution limits and opt-in smoke checks                                             |
-| [Instinct integration](instinct.md)                        | Submitter contract, idempotency, polling and external acceptance                                                              |
-| [Manual recovery checks](manual-test.md)                   | Connectivity, network interruption and worker restart scenarios                                                               |
+| [Instinct integration](instinct.md)                     | Submitter contract, idempotency, polling and external acceptance                                                              |
+| [Manual recovery checks](manual-test.md)                | Connectivity, network interruption and worker restart scenarios                                                               |
 
 ## Verification and history
 

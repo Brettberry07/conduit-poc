@@ -29,6 +29,8 @@ export async function claim(db: DB, worker: string) {
     (status='queued' OR (status='running' AND lease_expires_at<=clock_timestamp()))
     AND (SELECT count(*) FROM orchestrator.jobs r WHERE r.status='running'
       AND r.lease_expires_at>clock_timestamp() AND r.submitter_id=candidate_job.submitter_id) < $2
+    AND NOT EXISTS(SELECT 1 FROM orchestrator.initiative_tasks it JOIN orchestrator.initiatives i ON i.id=it.initiative_id
+      WHERE it.root_job_id=candidate_job.root_job_id AND i.status<>'active')
     AND (task<>'development' OR (
       EXISTS(SELECT 1 FROM orchestrator.projects p WHERE p.id=candidate_job.project_id AND p.enabled)
       AND EXISTS(SELECT 1 FROM orchestrator.development_tasks t WHERE t.job_id=candidate_job.root_job_id FOR UPDATE SKIP LOCKED)

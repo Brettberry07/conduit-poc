@@ -946,7 +946,7 @@ test(
           const { rows } = await pool.query(
             `SELECT c.relname,relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='orchestrator' AND c.relkind='r'`,
           );
-          assert.equal(rows.length, 8);
+          assert.equal(rows.length, 13);
           assert.ok(rows.some((r) => r.relname === "auth_users"));
           for (const row of rows)
             assert.equal(
