@@ -22,4 +22,12 @@ Polling runs about every three seconds while visible and pauses when hidden. Err
 
 Cmd/Ctrl+B toggles the desktop sidebar. Cmd/Ctrl+K opens navigation and filtering. Enter activates cards; Escape closes native modal dialogs with focus restored. Mobile uses bottom navigation and full-screen detail sheets. This console is read-only.
 
+The visual foundation lives in `src/app/app/gui.css`: warm light neutrals, one indigo accent ramp, semantic status colors, a 4px spacing scale, and shared type, radius, shadow, and motion tokens on `.console`. Media-query breakpoints remain literal because CSS custom properties cannot be used in media conditions. Inline, decorative 16px SVGs in `src/gui/client.tsx` share a 1.5 stroke and inherit text color. Buttons use the secondary surface style by default; `.primary` identifies the main connection action.
+
+Typography currently uses the system-ui fallback permitted for offline builds, with tight heading tracking and tabular counts, IDs, and timestamps. `next/font/google` Inter was attempted, but the build environment could not reach Google Fonts; the CSS `--font-inter` hook remains available for a future font-enabled build. No font CDN request or new dependency is shipped.
+
+Visual review still needs fresh desktop (1440 × 1000) and mobile (390 × 844) screenshots of `/app/board` while disconnected, including desktop sidebar and mobile bottom navigation. Also capture the collapsed desktop sidebar using its toggle. Screenshot capture was attempted with installed headless Chrome, which exited before rendering in the restricted worker. Existing screenshots below predate this foundation and are not evidence of the new appearance.
+
+Offline verification retry: TypeScript checking and all 54 tests across the 11 service-independent test files pass. `tests/events.test.ts` and `tests/initiatives.test.ts` require embedded PostgreSQL and allocate a loopback port with `server.listen(0, "127.0.0.1")`. This sandbox denies even loopback sockets: a standalone Node socket probe returns `EPERM`. Rerunning those files also aborts with a Node `InternalCallbackScope::Close` assertion. They remain unmodified and must be verified in an environment that permits their database service; this is not a fully passing configured test run.
+
 Security headers apply only to `/app` routes. A strict script CSP is deferred: Next's inline bootstrap scripts require a coordinated nonce strategy; a static policy would break hydration. No inline eval policy is added. Existing API-key authentication behavior is unchanged.
