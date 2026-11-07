@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readApi } from "../src/gui/auth";
 import {
   column,
   dependencyLabel,
@@ -122,4 +123,24 @@ test("draft review is deduplicated by root and offline workers require queue", (
   };
   assert.equal(needsYou([a], [w], {}).length, 0);
   assert.equal(needsYou([job()], [w], {}).length, 1);
+});
+
+test("the console reads exact job history through its same-origin GET allowlist", async () => {
+  const path =
+    "/api/agent/events?job_id=11111111-1111-4111-8111-111111111111&limit=20";
+  const signal = new AbortController().signal;
+  const read = (url: string) =>
+    readApi(url, "test-viewer", signal, async (actual, init) => {
+      assert.equal(actual, path);
+      assert.equal(init.method, "GET");
+      assert.equal(init.redirect, "error");
+      assert.deepEqual(init.headers, { Authorization: "Bearer test-viewer" });
+      return Response.json({ events: [] });
+    });
+  assert.deepEqual(await read(path), { events: [] });
+  await assert.rejects(
+    read("/api/agent/event-consumers/viewer/ack"),
+    /Unsupported read/,
+  );
+  await assert.rejects(read(path + "&after=0"), /Unsupported read/);
 });

@@ -191,13 +191,18 @@ export async function initiativeApi(
           .parse(url.searchParams.get("limit") ?? 50);
         const before = url.searchParams.get("before");
         if (before) z.string().uuid().parse(before);
+        const reviewId = z
+          .string()
+          .uuid()
+          .nullable()
+          .parse(url.searchParams.get("review_id"));
         const { rows } = await c.query(
           `SELECT r.*,p.head_commit,p.pull_request,j.id AS latest_job_id FROM orchestrator.initiative_reviews r
         JOIN orchestrator.development_tasks p ON p.job_id=r.root_job_id
         JOIN LATERAL (SELECT id FROM orchestrator.jobs WHERE root_job_id=r.root_job_id ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
         WHERE r.initiative_id=$1 AND r.owner=$2 AND ($3::uuid IS NULL OR (r.created_at,r.id)<(SELECT created_at,id FROM orchestrator.initiative_reviews WHERE id=$3 AND initiative_id=$1 AND owner=$2))
-        ORDER BY r.created_at DESC,r.id DESC LIMIT $4`,
-          [id, key.principal, before, limit],
+        AND ($5::uuid IS NULL OR r.id=$5) ORDER BY r.created_at DESC,r.id DESC LIMIT $4`,
+          [id, key.principal, before, limit, reviewId],
         );
         return json({
           reviews: rows.map((r) => ({
@@ -233,7 +238,22 @@ export async function initiativeApi(
               plan_url: `/api/initiatives/${id}/plan`,
             }
           : i;
-      return json({ initiative, ...state });
+      if (op !== "resume") return json({ initiative, ...state });
+      const {
+        rows: [latest],
+      } = await c.query(
+        `SELECT cursor::text FROM orchestrator.events WHERE owner=$1 AND initiative_id=$2
+         ORDER BY orchestrator.events.cursor DESC LIMIT 1`,
+        [key.principal, id],
+      );
+      return json({
+        initiative,
+        ...state,
+        activity: {
+          latest_cursor: latest?.cursor ?? null,
+          history_url: `/api/agent/events?initiative_id=${id}`,
+        },
+      });
     });
   if (method === "PATCH" && op === "plan") {
     const input = editInitiative.parse(

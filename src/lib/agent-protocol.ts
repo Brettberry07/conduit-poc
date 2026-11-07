@@ -18,7 +18,7 @@ import {
 // capabilities, excluding only runtime enforcement state and the hash itself.
 export const protocol = {
   service: "Conduit",
-  protocol_version: "5b.1",
+  protocol_version: "5c.1",
   description:
     "Scoped development orchestration with local coding, verification and draft PR review",
   supported_task_types: [
@@ -30,6 +30,9 @@ export const protocol = {
   endpoints: {
     manifest: "GET /api/agent/manifest",
     capabilities: "GET /info",
+    events: "GET /api/agent/events",
+    event_consumer: "GET /api/agent/event-consumers/{name}",
+    acknowledge_events: "POST /api/agent/event-consumers/{name}/ack",
     projects: "GET /api/projects",
     project: "GET /api/projects/{id}",
     submit: "POST /api/jobs",
@@ -98,6 +101,28 @@ export const protocol = {
     edit_schema: z.toJSONSchema(editInitiative),
     activation_schema: z.toJSONSchema(activationInput),
   },
+  event_contract: {
+    schema_version: 1,
+    ordering:
+      "Per principal, ascending committed cursor. Treat decimal strings as opaque positions.",
+    delivery: "At least once with an explicit durable checkpoint",
+    read_scope: "jobs:read",
+    acknowledge_scope: "jobs:revise",
+    default_page_size: 50,
+    maximum_page_size: 100,
+    feed: "Use after=0 for replay or after=<saved cursor>. An empty page preserves after.",
+    history:
+      "Use initiative_id or job_id with optional before event ID for descending history. Only unfiltered feed pages carry checkpoint cursors.",
+    consumer_name:
+      "1 to 64 lowercase ASCII letters, digits, underscores or hyphens. Start with a letter or digit.",
+    initial_cursor: "0",
+    acknowledgement: {
+      cursor: "highest contiguous processed cursor",
+      expected_previous_cursor: "checkpoint before processing",
+    },
+    conflict:
+      "On 409, reload the checkpoint before continuing. Retry a timed-out acknowledgement with the same body.",
+  },
   policy: {
     field: "policy_version",
     legacy_identification:
@@ -163,6 +188,14 @@ export const protocol = {
       "Use existing create/read/revise scopes only. Save returned job ID immediately. Poll /api/jobs/{id} at a modest interval (for example 3 seconds), stop on completed/failed/blocked, and preserve IDs and last state on timeout. Report queued/waiting_dependencies honestly. Use /api/workers for readiness.",
       "On stale/missing-required policy errors, retrieve the current manifest and adapt preparation before retrying. Accepted identical idempotent retries remain valid across policy changes; retain the accepted body. A 409 content conflict requires investigation, not a fresh duplicate job. Stop and report authentication or permission failures.",
     ],
+    events: [
+      "Discover changes through the unfiltered event feed. Use a stable consumer name, read its saved checkpoint, and process each page in cursor order. Acknowledge only the highest contiguous event whose required action or decision has been durably recorded. Event delivery can repeat after an interruption.",
+      "For first use, reconcile current owned initiatives and standalone jobs, then replay from cursor 0. History starts at event deployment. Use initiative resume as the current source of truth and resume existing work.",
+      "For job.completed, inspect the job, verification, changed-file metadata, actual diff and publication. Compare with acceptance criteria and inspect initiative context when linked. Record an assessment where appropriate. Request only a justified, permitted revision within the existing two-attempt autonomous budget.",
+      "For job.failed or job.blocked, inspect the recorded cause, determine what is actionable and escalate outstanding blockers or human decisions. Avoid duplicate replacement jobs.",
+      "For pull_request.merged_observed, read current initiative state and let the existing queue resolve dependencies. Treat the time as a Conduit observation. Preserve human control of merge and deployment.",
+      "For initiative.review_recorded, use data.review_id with the initiative reviews endpoint's review_id filter if evidence is needed. Treat assessments you already recorded or acted on as informational. Check current review and revision history before acting on any assessment, and use stable idempotency keys for the same actions across retries. Never turn replay or your own review into another revision.",
+    ],
     review: [
       "Retrieve job outcome, verification results, /changes, paginated /diff (follow next_offset), /publication and /executions where relevant. Review both execution and cumulative pull_request artifacts when appropriate; bounded or unavailable diffs are limitations, not proof of no changes.",
       "Compare actual implementation against acceptance criteria and the user's intent. For detailed work also evaluate research recommendations; the user's request remains authoritative. Distinguish checked evidence from untested behavior and external acceptance still needed.",
@@ -180,7 +213,7 @@ export const protocol = {
 };
 
 export function policyVersion(content: unknown = protocol): string {
-  return `5b-${createHash("sha256").update(JSON.stringify(content)).digest("hex")}`;
+  return `5c-${createHash("sha256").update(JSON.stringify(content)).digest("hex")}`;
 }
 export function agentManifest() {
   return {

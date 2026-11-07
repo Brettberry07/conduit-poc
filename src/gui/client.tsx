@@ -2,7 +2,14 @@
 import Link from "next/link";
 import { authRequest, connectEmail, readApi, sessionClient } from "./auth";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   age,
   column,
@@ -14,6 +21,7 @@ import {
   type Job,
   type Worker,
   type Detail,
+  type ActivityEvent,
 } from "./model";
 type Data = {
   jobs: Job[];
@@ -90,12 +98,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
       setUpdated(0);
       setError("");
     });
-  const read = (path: string, token: string, signal: AbortSignal) =>
-    readApi(path, token, signal, (path, init, token) =>
-      /^cnd_live_/.test(token)
-        ? fetch(path, init)
-        : auth.current!.fetch(path, init, token),
-    );
+  const read = useCallback(
+    (path: string, token: string, signal: AbortSignal) =>
+      readApi(path, token, signal, (path, init, token) =>
+        /^cnd_live_/.test(token)
+          ? fetch(path, init)
+          : auth.current!.fetch(path, init, token),
+      ),
+    [],
+  );
   useEffect(() => {
     if (authRequest("password", {})) auth.current!.restore();
   }, []);
@@ -153,10 +164,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
     let stopped = false,
       busy = false;
     let controller = new AbortController();
-    const observations: Record<
-      string,
-      NonNullable<Detail["observations"]>
-    > = {};
     async function poll() {
       if (document.hidden || busy || stopped) return;
       busy = true;
@@ -183,22 +190,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
               const id = ids[cursor++],
                 job = j.jobs.find((v: Job) => v.id === id),
                 d: Detail = { errors: [] };
-              if (job?.phase) {
-                const history = observations[id] ?? [];
-                const previous = history.at(-1);
-                if (
-                  previous?.phase !== job.phase ||
-                  previous?.attempt !== job.attempt_count
-                ) {
-                  history.push({
-                    phase: job.phase,
-                    at: new Date().toISOString(),
-                    attempt: job.attempt_count,
-                  });
-                }
-                observations[id] = history.slice(-30);
-                d.observations = [...observations[id]];
-              }
               await Promise.all(
                 (job?.status === "running"
                   ? ["publication", "executions"]
@@ -520,6 +511,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         )}
         {selected && key && (
           <JobDetail
+            key={selected.id}
             read={read}
             job={jobs.find((j) => j.id === selected.id) ?? selected}
             apiKey={key}
@@ -613,15 +605,10 @@ function Checks({ result }: { result?: Record<string, unknown> | null }) {
 function Timeline({ job, detail }: { job: Job; detail?: Detail }) {
   return (
     <div className="timeline">
-      <h4>Reported activity</h4>
+      <h4>Execution details</h4>
       <ol>
         {job.claimed_at && <li>Claimed · {age(job.claimed_at)}</li>}
-        <li>Current phase: {job.phase ?? "not reported"} (observed)</li>
-        {detail?.observations?.map((o, i) => (
-          <li key={`phase-${i}`}>
-            {o.phase} · attempt {o.attempt} · observed {age(o.at)} this session
-          </li>
-        ))}
+        <li>Current phase: {job.phase ?? "not reported"}</li>
         {detail?.executions?.map((e) => (
           <li key={e.attempt}>
             Attempt {e.attempt} · {e.status} · {age(e.started_at)}
@@ -813,6 +800,53 @@ export function Screen({ view }: { view: string }) {
     </section>
   );
 }
+function JobActivity({
+  events,
+  error,
+  publication,
+}: {
+  events: ActivityEvent[] | null;
+  error: string;
+  publication?: Detail["publication"];
+}) {
+  const pr = publication?.pull_request;
+  return (
+    <section className="timeline" aria-label="Recorded activity">
+      <h2>Recorded activity</h2>
+      {error && <p role="status">{error}</p>}
+      {!events && !error && <p role="status">Loading activity…</p>}
+      {events?.length === 0 && (
+        <p>No activity has been recorded for this job.</p>
+      )}
+      {!!events?.length && (
+        <>
+          <p className="muted">Up to 20 recent events, oldest first.</p>
+          <ol>
+            {[...events].reverse().map((event) => (
+              <li key={event.id}>
+                <strong>{event.type.replace(/[._]/g, " ")}</strong>
+                {event.data.phase && <> · {event.data.phase}</>}
+                {(event.data.attempt ?? 0) > 0 && (
+                  <> · attempt {event.data.attempt}</>
+                )}
+                {" · "}
+                <time dateTime={event.occurred_at}>
+                  {new Date(event.occurred_at).toLocaleString()}
+                </time>
+                {pr && event.data.number === pr.number && (
+                  <>
+                    {" "}
+                    · <Github url={pr.url} />
+                  </>
+                )}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </section>
+  );
+}
 function JobDetail({
   job,
   apiKey,
@@ -824,7 +858,40 @@ function JobDetail({
   close: () => void;
   read: (path: string, token: string, signal: AbortSignal) => Promise<any>;
 }) {
+  const { details } = useContext(Context);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [events, setEvents] = useState<ActivityEvent[] | null>(null);
+  const [activityError, setActivityError] = useState("");
+  useEffect(() => {
+    const a = new AbortController();
+    let busy = false;
+    async function refresh() {
+      if (a.signal.aborted || document.hidden || busy) return;
+      busy = true;
+      try {
+        const { events } = await read(
+          `/api/agent/events?job_id=${encodeURIComponent(job.id)}&limit=20`,
+          apiKey,
+          a.signal,
+        );
+        if (!a.signal.aborted) {
+          setEvents(events);
+          setActivityError("");
+        }
+      } catch {
+        if (!a.signal.aborted)
+          setActivityError("Activity is temporarily unavailable.");
+      } finally {
+        busy = false;
+      }
+    }
+    void refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => {
+      a.abort();
+      clearInterval(timer);
+    };
+  }, [job.id, apiKey, read]);
   useEffect(() => {
     const a = new AbortController();
     const d: Detail = { errors: [] };
@@ -853,6 +920,11 @@ function JobDetail({
       <p className="eyebrow">JOB DETAIL · {job.status}</p>
       <h1>{job.title}</h1>
       <code>{job.id}</code>
+      <JobActivity
+        events={events}
+        error={activityError}
+        publication={details[job.id]?.publication ?? detail?.publication}
+      />
       <h2>Instructions</h2>
       <Json value={job.instructions ?? job.description} />
       <h2>Acceptance criteria</h2>

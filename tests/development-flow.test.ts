@@ -412,6 +412,37 @@ policyTest(
           assert.notEqual(outcome.result.head_commit, firstHead);
           assert.equal((outcome.result.pull_request as any).number, 42);
           assert.equal(fake.creates, 1);
+          const revisionEvents = (
+            await (await req(`/api/agent/events?job_id=${revision.id}`)).json()
+          ).events;
+          assert.equal(
+            revisionEvents.filter((event: any) => event.type === "job.created")
+              .length,
+            1,
+          );
+          assert.equal(
+            revisionEvents.find((event: any) => event.type === "job.created")
+              .data.revision,
+            true,
+          );
+          assert.equal(
+            revisionEvents.filter(
+              (event: any) => event.type === "pull_request.updated",
+            ).length,
+            1,
+          );
+          const update = revisionEvents.find(
+            (event: any) => event.type === "pull_request.updated",
+          );
+          assert.equal(update.root_job_id, root.id);
+          assert.equal(update.data.number, 42);
+          assert.equal(update.data.head_commit, outcome.result.head_commit);
+          assert.equal(
+            revisionEvents.some(
+              (event: any) => event.type === "pull_request.created",
+            ),
+            false,
+          );
           const history = await (
             await req(`/api/jobs/${root.id}/revisions`)
           ).json();

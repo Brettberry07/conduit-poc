@@ -115,7 +115,16 @@ test(
         )
       ).rows[0];
       const applied = await applyMigrations(admin, true);
-      assert.equal(applied.length, 9);
+      assert.equal(applied.length, 10);
+      assert.match(applied.at(-1)!, /phase_5c_events/);
+      assert.equal(
+        (
+          await admin.query(
+            "SELECT count(*)::int AS count FROM orchestrator.events",
+          )
+        ).rows[0].count,
+        0,
+      );
       assert.deepEqual(await applyMigrations(admin), []);
       assert.ok(
         (await admin.query("SELECT revoked_at FROM orchestrator.api_keys"))
@@ -451,6 +460,32 @@ test(
           assert.ok(job.completed_at);
           const listed = await (await request("/api/jobs")).json();
           assert.equal(listed.jobs[0].claim_token, undefined);
+          const page = await request("/api/agent/events?limit=2");
+          assert.equal(page.status, 200);
+          assert.equal(page.headers.get("cache-control"), "no-store");
+          const { events, next_after } = await page.json();
+          assert.deepEqual(
+            events.map((event: any) => event.type),
+            ["job.created", "job.claimed"],
+          );
+          const consumer = "/api/agent/event-consumers/http-smoke";
+          const ack = await request(consumer + "/ack", {
+            cursor: next_after,
+            expected_previous_cursor: "0",
+          });
+          assert.equal(ack.status, 200);
+          const { consumer: checkpoint } = await (
+            await request(consumer)
+          ).json();
+          const resumed = await (
+            await request(
+              "/api/agent/events?after=" + checkpoint.acknowledged_cursor,
+            )
+          ).json();
+          assert.deepEqual(
+            resumed.events.map((event: any) => event.type),
+            ["job.completed"],
+          );
           await stop(worker);
           worker = undefined;
         },

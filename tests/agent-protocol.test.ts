@@ -42,6 +42,9 @@ test("policy hashes all operational content deterministically without runtime se
   changed.playbook.review.push("Another review requirement");
   assert.notEqual(policyVersion(), policyVersion(changed));
   assert.equal(agentManifest().policy_version, policyVersion());
+  assert.match(policyVersion(), /^5c-[0-9a-f]{64}$/);
+  assert.equal(agentManifest().endpoints.events, "GET /api/agent/events");
+  assert.deepEqual(agentManifest().event_contract, protocol.event_contract);
   assert.equal(
     agentManifest().preparation_contract.research_schema.additionalProperties,
     false,

@@ -24,6 +24,7 @@ The API coordinates the work; your local machine executes it. Each development t
 
 - **Prepare through a current PM protocol.** External assistants retrieve the authenticated agent manifest, choose normal or researched detailed mode, and retain cited preparation context. See the [Phase 5A protocol and rollout](docs/phase-5a-agent-protocol.md) and [short Instinct standing instruction](docs/instinct-standing-instruction.md).
 - **Coordinate persistent initiatives.** Save versioned task plans, activate them atomically, track merge-gated dependencies and PM assessments, and resume across conversations. See [Phase 5B](docs/phase-5b-initiatives.md).
+- **Resume from durable activity.** Read an owner-scoped event feed and save a checkpoint across sessions. See [Phase 5C](docs/phase-5c-events.md).
 - **Track durable jobs.** UUID idempotency keys support submission retries with an identical body. Scoped credentials separate submitters from workers.
 - **Work in registered repositories.** An administrator approves projects, base branches, workspace permissions and verification commands.
 - **Run Codex in isolated worktrees.** Each root task gets a feature branch and retained workspace. The local worker executes up to `CONDUIT_MAX_AGENTS` jobs concurrently (default `4`), with one job per agent in a network-disabled sandbox.

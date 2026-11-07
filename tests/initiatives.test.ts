@@ -107,6 +107,14 @@ test(
           runtime!,
         );
       await checkInitiatives(req, db, project);
+      const {
+        rows: [completion],
+      } = await db.query(
+        `SELECT e.data FROM orchestrator.events e JOIN orchestrator.initiatives i
+         ON i.id=e.initiative_id AND i.owner=e.owner
+         WHERE e.type='initiative.completed' AND i.status='completed'`,
+      );
+      assert.equal(completion?.data.status, "completed");
       const tables = (
         await db.query(
           `SELECT relname,relrowsecurity FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid WHERE n.nspname='orchestrator' AND relname LIKE 'initiative%'`,

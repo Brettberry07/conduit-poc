@@ -57,8 +57,15 @@ export function requiredScope(path: string, method: string): Scope | null {
     return null;
   }
   if (
+    method === "POST" &&
+    /^\/api\/agent\/event-consumers\/[^/]+\/ack$/.test(path)
+  )
+    return "jobs:revise";
+  if (
     method === "GET" &&
     (path === "/api/agent/manifest" ||
+      path === "/api/agent/events" ||
+      /^\/api\/agent\/event-consumers\/[^/]+$/.test(path) ||
       /^\/api\/projects(?:\/[^/]+)?$/.test(path) ||
       /^\/api\/jobs\/[^/]+\/(revisions|executions|changes|diff|publication)$/.test(
         path,

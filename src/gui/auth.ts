@@ -144,7 +144,7 @@ export async function readApi(
   ) => Promise<Response>,
 ) {
   if (
-    !/^\/api\/(workers|jobs(?:\?[^#]*)?|jobs\/[a-zA-Z0-9-]+\/(executions|changes|publication))$/.test(
+    !/^\/api\/(workers|jobs(?:\?[^#]*)?|jobs\/[a-zA-Z0-9-]+\/(executions|changes|publication)|agent\/events\?job_id=[a-fA-F0-9-]{36}&limit=20)$/.test(
       path,
     )
   )

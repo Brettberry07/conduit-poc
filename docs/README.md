@@ -4,7 +4,7 @@
 
 [Read-only web console](gui.md)
 
-[Phase 5B persistent initiatives](phase-5b-initiatives.md) · [Phase 5A agent protocol and rollout](phase-5a-agent-protocol.md) · [Instinct standing instruction](instinct-standing-instruction.md)
+[Phase 5C durable events and checkpoints](phase-5c-events.md) · [Phase 5B persistent initiatives](phase-5b-initiatives.md) · [Phase 5A agent protocol and rollout](phase-5a-agent-protocol.md) · [Instinct standing instruction](instinct-standing-instruction.md)
 
 ## Setup and operation
 

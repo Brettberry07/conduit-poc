@@ -47,8 +47,13 @@ export type Execution = {
   error?: string;
   result?: Record<string, unknown>;
 };
+export type ActivityEvent = {
+  id: string;
+  type: string;
+  occurred_at: string;
+  data: { phase?: string; attempt?: number; number?: number };
+};
 export type Detail = {
-  observations?: { phase: string; at: string; attempt: number }[];
   publication?: Publication | null;
   executions?: Execution[];
   files?: unknown[];

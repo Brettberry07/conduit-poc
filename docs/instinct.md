@@ -2,6 +2,10 @@
 
 The earlier Cloudflare/local-PostgreSQL communication loop was verified by Instinct. The new Vercel/Supabase loop is deployed and verified from the Mac worker. A request from Instinct itself is still the final external acceptance gate. Use **https://YOUR-PROJECT.vercel.app** and the new `.secrets/<submitter-key>.json` delivery file; the earlier hourly key is not registered in this hosted database.
 
+## Phase 5C activity
+
+When the event API is deployed, use the [durable feed and named checkpoint](phase-5c-events.md) to discover changes across sessions. Read the current job or initiative evidence before acting and save a checkpoint after durable processing.
+
 ## Phase 5A protocol
 
 For the reusable development protocol, use the [Phase 5A contract and staged rollout](phase-5a-agent-protocol.md) and give Instinct the [short standing instruction](instinct-standing-instruction.md) once. The authenticated manifest is authoritative for PM behavior after this release is installed; the task-specific prompts below remain historical handoffs. Hosted deployment and real Instinct adoption require separate acceptance.
@@ -30,7 +34,7 @@ On the administrator's Mac, with `.env.admin.local` pointing only to the dedicat
 npm run key -- create --type instinct --principal instinct --name "Instinct primary" --out .secrets/instinct.json
 ```
 
-This generates a 256-bit random `cnd_live_...` credential with a 30-day expiration and scopes `jobs:create`, `jobs:read`. The private JSON file is mode 600 and ignored by version control/deployment uploads. Only the hash, short prefix and metadata enter Supabase. Alternatively omit `--out` in an interactive terminal to display the plaintext once. No later listing or API response can retrieve it.
+This generates a 256-bit random `cnd_live_...` credential with a 30-day expiration and scopes `jobs:create`, `jobs:read`, and `jobs:revise`. The private JSON file is mode 600 and ignored by version control/deployment uploads. Only the hash, short prefix and metadata enter Supabase. Alternatively omit `--out` in an interactive terminal to display the plaintext once. No later listing or API response can retrieve it.
 
 Transfer its `token` value into Instinct's secure secret/connection store. Never put it in conversation, source, an issue, URLs, screenshots or verbose HTTP logs. To copy the value on macOS without printing it:
 

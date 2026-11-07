@@ -129,7 +129,9 @@ export async function developmentApi(
       .strict()
       .parse(await readBody(req));
     await db.query(
-      `UPDATE orchestrator.development_tasks SET pull_request=$2,pull_request_observed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE job_id=$1 AND pull_request->>'number'=$3 AND pull_request->>'url'=$4`,
+      `UPDATE orchestrator.development_tasks SET pull_request=$2,publication_job_id=NULL,pull_request_observed_at=clock_timestamp(),updated_at=clock_timestamp()
+       WHERE job_id=$1 AND pull_request->>'number'=$3 AND pull_request->>'url'=$4
+       AND (pull_request->'merged' IS DISTINCT FROM 'true'::jsonb OR $2::jsonb->'merged'='true'::jsonb)`,
       [
         v.root_job_id,
         v.pull_request,
@@ -177,7 +179,15 @@ export async function developmentApi(
       const { rows } = await db.query(
         `WITH owned AS (UPDATE orchestrator.jobs SET phase=coalesce($4,phase) WHERE id=$1 AND task='development' AND worker_id=$2 AND claim_token=$3 AND status='running' AND lease_expires_at>clock_timestamp() AND EXISTS(SELECT 1 FROM orchestrator.projects p WHERE p.id=orchestrator.jobs.project_id AND p.enabled AND orchestrator.jobs.base_branch=ANY(p.allowed_base_branches)) RETURNING root_job_id,id,attempt_count),
     attempt AS (UPDATE orchestrator.execution_attempts a SET starting_commit=coalesce(a.starting_commit,$9) FROM owned o WHERE a.job_id=o.id AND a.attempt=o.attempt_count AND a.completed_at IS NULL)
-    UPDATE orchestrator.development_tasks t SET base_commit=coalesce(t.base_commit,$5),head_commit=coalesce($6,t.head_commit),pull_request=coalesce($7,t.pull_request),publication_state=coalesce($8,t.publication_state),pull_request_observed_at=CASE WHEN $7::jsonb IS NOT NULL THEN clock_timestamp() ELSE t.pull_request_observed_at END,updated_at=clock_timestamp() FROM owned o WHERE t.job_id=o.root_job_id RETURNING t.*`,
+    UPDATE orchestrator.development_tasks t SET base_commit=coalesce(t.base_commit,$5),
+    head_commit=coalesce($6,t.head_commit),pull_request=CASE
+     WHEN $7::jsonb IS NULL OR (t.pull_request->'merged'='true'::jsonb AND $7::jsonb->'merged'='false'::jsonb)
+     THEN t.pull_request ELSE $7 END,
+    publication_state=coalesce($8,t.publication_state),publication_job_id=o.id,
+    pull_request_observed_at=CASE
+     WHEN $7::jsonb IS NULL OR (t.pull_request->'merged'='true'::jsonb AND $7::jsonb->'merged'='false'::jsonb)
+     THEN t.pull_request_observed_at ELSE clock_timestamp() END,
+    updated_at=clock_timestamp() FROM owned o WHERE t.job_id=o.root_job_id RETURNING t.*`,
         [
           id,
           key.principal,

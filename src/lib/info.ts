@@ -27,6 +27,7 @@ export function info(request: Request): Response {
       "Idempotent job creation via Idempotency-Key",
       "Job status and result retrieval",
       "Worker availability reporting",
+      "Durable owner-scoped event feed, job and initiative activity history, and consumer checkpoints",
     ],
     development: [
       "Registered GitHub projects",
@@ -54,6 +55,9 @@ export function info(request: Request): Response {
       "GET /auth-check",
       "GET /api/jobs",
       "GET /api/agent/manifest",
+      "GET /api/agent/events",
+      "GET /api/agent/event-consumers/{name}",
+      "POST /api/agent/event-consumers/{name}/ack",
       "POST /api/jobs",
       "GET /api/jobs/{id}",
       "GET /api/workers",

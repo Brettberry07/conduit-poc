@@ -1,3 +1,4 @@
+import { eventApi } from "./event-api";
 import { initiativeApi } from "./initiative-api";
 import { developmentApi } from "./development-api";
 import { agentManifest } from "./agent-protocol";
@@ -101,6 +102,8 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
     if (method === "GET" && path === "/api/agent/manifest")
       return json(agentManifest());
+    const events = await eventApi(req, db, key, body);
+    if (events) return events;
     const initiative = await initiativeApi(req, db, key, body);
     if (initiative) return initiative;
     const creationBody =
