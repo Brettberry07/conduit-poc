@@ -30,6 +30,9 @@ export type Worker = {
 };
 export type Publication = {
   publication_state: string;
+  branch?: string | null;
+  head_commit?: string | null;
+  pull_request_observed_at?: string | null;
   updated_at?: string;
   pull_request?: {
     url: string;

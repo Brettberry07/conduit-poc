@@ -1,4 +1,5 @@
 import { SCOPES, credentialScopes, requiredScope } from "./keys";
+import { publicPage } from "./public-page";
 
 // All inputs are explicit; describing the service needs no database or environment.
 export function info(request: Request): Response {
@@ -148,7 +149,10 @@ export function info(request: Request): Response {
         .join("") +
       "</tbody></table>";
     return new Response(
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Conduit capabilities</title></head><body><h1>Conduit capabilities</h1>${content}</body></html>`,
+      publicPage(
+        "Conduit capabilities",
+        `<p class="eyebrow">Product & API reference</p><h1>Conduit capabilities</h1>${content}`,
+      ),
       { headers: { ...headers, "Content-Type": "text/html; charset=utf-8" } },
     );
   }
