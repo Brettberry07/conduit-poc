@@ -125,6 +125,7 @@ Every `/api/*` operation requires `Authorization: Bearer <cnd_live_…>`. Reques
 | `POST /api/jobs`                                 | `jobs:create`  | Create; UUID `Idempotency-Key` header required       |
 | `GET /api/jobs?limit=100&before=<ISO timestamp>` | `jobs:read`    | Own jobs only; newest first, maximum 100             |
 | `GET /api/jobs/:id`                              | `jobs:read`    | Own job status/result/error/timestamps               |
+| `POST /api/jobs/:id/retry`                       | `jobs:revise`  | Requeue an eligible failed or blocked job            |
 | `GET /api/workers`                               | `jobs:read`    | Existing worker availability endpoint; no UI         |
 | `POST /api/heartbeat`                            | `jobs:update`  | Update this worker identity's last-seen timestamp    |
 | `POST /api/claim`                                | `jobs:claim`   | Atomic claim or `{ "job": null }`                    |
@@ -145,6 +146,10 @@ Create body:
 Job responses use `{ "job": ... }`; lists use `{ "jobs": [...] }`. Submitter responses never contain claim tokens. Legacy jobs retain `queued`, `running`, `completed`, `failed`. Phase 4 adds `waiting_dependencies`, `blocked`, and a running `phase` field. Errors remain 400 invalid input, 401 missing/invalid/expired/revoked key, 403 missing scope, 404 missing/unowned job/route, 409 stale claim or idempotency conflict, 500 sanitized internal error. Key-management paths do not exist.
 
 Use the same UUID and identical body to retry an ambiguous creation response. Timestamp pagination can skip exact timestamp ties; integrations should retain job IDs and retrieve results individually.
+
+To recover an owned failed or blocked job, send `{"expected_attempt_count":1}` to `POST /api/jobs/:id/retry`, replacing `1` with the job's current `attempt_count`. The response contains the same job ID. Send the same body after a lost response and poll that ID. Once a newer attempt exists, the original request only returns the current state. Each claim counts toward the three-attempt limit.
+
+A development retry needs an approved project and base branch and an active initiative if the job belongs to one. Every prerequisite PR must be merged. Retrying an upstream job leaves blocked dependents blocked. After their prerequisites merge, retry those jobs individually. The original worker resumes publication from its saved checkpoint or checks the preserved worktree before restarting an interrupted Codex run. See [development recovery](PHASE_4_TESTING.md#inspect-recover-and-clean-up).
 
 ## Queue guarantees
 

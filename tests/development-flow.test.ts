@@ -554,6 +554,11 @@ policyTest(
             reported.job.result.verification.checks[0].output,
             "Example assertion failed",
           );
+          const retry = await req(`/api/jobs/${j.id}/retry`, "POST", {
+            expected_attempt_count: 1,
+          });
+          assert.equal(retry.status, 409);
+          assert.match((await retry.json()).error, /Verification failed/);
           assert.equal(independentFake.creates, 0);
           assert.equal(
             await remoteHead(
@@ -594,11 +599,10 @@ policyTest(
           assert.equal(outcome.action, "failed");
           const before = executions;
           isolated.failPatch(false);
-          // Administrator requeues publication recovery, preserving prior immutable attempt records.
-          await db!.query(
-            `UPDATE orchestrator.jobs SET status='queued',completed_at=NULL WHERE id=$1`,
-            [j.id],
-          );
+          const retry = await req(`/api/jobs/${j.id}/retry`, "POST", {
+            expected_attempt_count: 1,
+          });
+          assert.equal(retry.status, 200, await retry.clone().text());
           const { job: reclaimed } = await call("/api/claim", {});
           assert.equal(reclaimed.attempt_count, 2);
           const recovered = await run(reclaimed);
@@ -617,6 +621,157 @@ policyTest(
             ["failed", "completed"],
           );
           deps.github = old;
+        },
+      );
+      await t.test(
+        "explicit retry recovers a clean interrupted worktree without unblocking dependent jobs",
+        async () => {
+          const oldGithub = deps.github,
+            execute = deps.execute;
+          deps.github = fakeGitHub(f, security).github;
+          const root = await submit();
+          const dependent = await submit({ dependency_job_ids: [root.id] });
+          const { job: original } = await call("/api/claim", {});
+          assert.equal(original.id, root.id);
+          deps.execute = async () => {
+            throw Error("Process could not start");
+          };
+          try {
+            assert.equal((await run(original)).action, "failed");
+            const checkpoint = join(
+              f.config.storage_root,
+              "executions",
+              f.project.id,
+              root.id + ".json",
+            );
+            const legacy = JSON.parse(await readFile(checkpoint, "utf8"));
+            delete legacy.execution_attempt;
+            await writeFile(checkpoint, JSON.stringify(legacy));
+            assert.equal((await call("/api/claim", {})).job, null);
+            const path = `/api/jobs/${root.id}/retry`;
+            const request = { expected_attempt_count: 1 };
+            assert.equal(
+              (await req(path, "POST", request, "other")).status,
+              404,
+            );
+            assert.equal(
+              (await req(path, "POST", request, "reader")).status,
+              403,
+            );
+            assert.equal(
+              (await req(path, "POST", request, "worker")).status,
+              403,
+            );
+            assert.equal((await req(path, "POST", {})).status, 400);
+            for (const response of await Promise.all([
+              req(path, "POST", request),
+              req(path, "POST", request),
+            ])) {
+              assert.equal(response.status, 200, await response.clone().text());
+              const { job } = await response.json();
+              assert.equal(job.id, root.id);
+              assert.equal(job.status, "queued");
+              assert.equal(job.attempt_count, 1);
+              assert.equal(job.claim_token, undefined);
+            }
+            const { job: recovered } = await call("/api/claim", {});
+            assert.equal(recovered.id, root.id);
+            assert.equal(recovered.explicit_retry, true);
+            assert.notEqual(recovered.claim_token, original.claim_token);
+            await assert.rejects(
+              call(`/api/jobs/${root.id}/report`, {
+                action: "failed",
+                error: "Stale report",
+                claim_token: original.claim_token,
+              }),
+              (error) => error instanceof ApiError && error.status === 409,
+            );
+            deps.execute = execute;
+            const outcome = await run(recovered);
+            assert.equal(outcome.action, "completed", JSON.stringify(outcome));
+            const { job: replay } = await (
+              await req(path, "POST", request)
+            ).json();
+            assert.equal(replay.attempt_count, 2);
+            assert.equal(replay.status, "completed");
+            const dependentPath = `/api/jobs/${dependent.id}`;
+            const { job: blocked } = await (await req(dependentPath)).json();
+            assert.equal(blocked.status, "blocked");
+            const attempt = { expected_attempt_count: 0 };
+            const retry = await req(dependentPath + "/retry", "POST", attempt);
+            assert.equal(retry.status, 409);
+            assert.match((await retry.json()).error, /prerequisite.*merged/);
+            const { publication } = await (
+              await req(`/api/jobs/${root.id}/publication`)
+            ).json();
+            await call("/api/development/reconcile", {
+              root_job_id: root.id,
+              pull_request: {
+                ...publication.pull_request,
+                state: "closed",
+                merged: true,
+              },
+            });
+            const eligible = await req(
+              dependentPath + "/retry",
+              "POST",
+              attempt,
+            );
+            assert.equal(eligible.status, 200, await eligible.clone().text());
+            const { job: child } = await call("/api/claim", {});
+            assert.equal(child.id, dependent.id);
+            assert.equal(child.attempt_count, 1);
+            deps.github = fakeGitHub(f, security).github;
+            assert.equal((await run(child)).action, "completed");
+          } finally {
+            deps.github = oldGithub;
+            deps.execute = execute;
+          }
+        },
+      );
+      await t.test(
+        "retry preserves interrupted edits and enforces the claim limit",
+        async () => {
+          const execute = deps.execute,
+            oldGithub = deps.github;
+          deps.github = fakeGitHub(f, security).github;
+          const root = await submit();
+          const { job: original } = await call("/api/claim", {});
+          const worktree = join(
+            f.config.storage_root,
+            "worktrees",
+            f.project.id,
+            root.id,
+          );
+          const untracked = join(worktree, "unfinished.txt");
+          deps.execute = async (workspace) => {
+            assert.equal(workspace, worktree);
+            await writeFile(untracked, "keep this\n");
+            throw Error("Process stopped during execution");
+          };
+          try {
+            assert.equal(original.id, root.id);
+            assert.equal((await run(original)).action, "failed");
+            for (const count of [1, 2]) {
+              const response = await req(`/api/jobs/${root.id}/retry`, "POST", {
+                expected_attempt_count: count,
+              });
+              assert.equal(response.status, 200);
+              const { job } = await call("/api/claim", {});
+              const outcome = await run(job);
+              assert.equal(outcome.action, "blocked");
+              assert.match(outcome.error!, /unpublished changes/);
+              assert.equal(await readFile(untracked, "utf8"), "keep this\n");
+            }
+            const exhausted = await req(`/api/jobs/${root.id}/retry`, "POST", {
+              expected_attempt_count: 3,
+            });
+            assert.equal(exhausted.status, 409);
+            assert.match((await exhausted.json()).error, /attempt limit/);
+          } finally {
+            deps.execute = execute;
+            deps.github = oldGithub;
+          }
         },
       );
       await t.test(

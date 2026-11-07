@@ -42,6 +42,7 @@ export const protocol = {
     submit: "POST /api/jobs",
     jobs: "GET /api/jobs",
     job: "GET /api/jobs/{id}",
+    retry: "POST /api/jobs/{id}/retry",
     workers: "GET /api/workers",
     changes: "GET /api/jobs/{id}/changes",
     diff: "GET /api/jobs/{id}/diff",
@@ -104,6 +105,13 @@ export const protocol = {
     lifecycle_schema: z.toJSONSchema(lifecycleInput),
     edit_schema: z.toJSONSchema(editInitiative),
     activation_schema: z.toJSONSchema(activationInput),
+  },
+  retry_contract: {
+    scope: "jobs:revise",
+    body: { expected_attempt_count: "attempt_count from GET /api/jobs/{id}" },
+    response: "200 with the same job ID and its current status",
+    conflict:
+      "409 if retry is ineligible. Check the error and inspect the job before proceeding.",
   },
   event_contract: {
     schema_version: 1,
@@ -293,6 +301,7 @@ export const protocol = {
     ],
     failures_and_decisions: [
       "Report job ID, phase, error, actual checks, changed files and draft PR when available. Explain blocked dependencies, missing research, verification gaps and recovery-required outcomes. Do not bypass locks, recovery rules or failures by creating duplicates.",
+      "After resolving a retryable failure, POST /api/jobs/{id}/retry with {expected_attempt_count} from the failed or blocked job. Replay the same body after a lost response and poll the same job ID. Leave dependent jobs blocked until all prerequisite PRs are merged. A worker may still block recovery if preserved changes need operator review.",
       "Escalate consequential ambiguity, conflicting requirements, security/credential needs, unavailable dependencies, exhausted revision budget, merge and deployment decisions to the user. Report concise outcomes with assumptions, evidence and remaining human decisions.",
     ],
     source_trust: [

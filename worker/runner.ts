@@ -22,6 +22,7 @@ export type ClaimedJob = {
   project?: string;
   worker_id?: string;
   attempt_count?: number;
+  explicit_retry?: boolean;
 };
 type Journal = {
   job: ClaimedJob;
@@ -91,11 +92,12 @@ export async function recoverJournals(stateDir: string): Promise<string[]> {
     )
     .sort()
     .map((name) => join(stateDir, name));
-  const ids = new Set<string>();
+  const claims = new Set<string>();
   for (const path of paths) {
     const { job } = await readJournal(path);
-    if (ids.has(job.id)) throw journalRefusal();
-    ids.add(job.id);
+    const claim = JSON.stringify([job.id, job.claim_token]);
+    if (claims.has(claim)) throw journalRefusal();
+    claims.add(claim);
   }
   return paths;
 }
@@ -123,7 +125,13 @@ export async function cycle(
     const { job } = await call("/api/claim", {});
     if (!job) return false;
     journal = { job };
-    path = join(stateDir, `journal-${encodeURIComponent(job.id)}.json`);
+    // A new claim can arrive before the prior agent removes its terminal journal.
+    const attempt =
+      job.attempt_count > 1 ? `-attempt-${job.attempt_count}` : "";
+    path = join(
+      stateDir,
+      `journal-${encodeURIComponent(job.id)}${attempt}.json`,
+    );
     onJournal?.(path);
     await save(journal);
     log("claimed", { job_id: job.id });

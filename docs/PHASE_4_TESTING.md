@@ -241,6 +241,8 @@ Generated PR bodies include title, job/root IDs, attempt, base, SHAs, Git-derive
 
 ## Inspect, recover and clean up
 
+Instinct can retry an eligible job through `POST /api/jobs/:id/retry` with `jobs:revise` and `{"expected_attempt_count":N}` from the current job. Poll the returned job ID to see whether the worker resumed execution or blocked for local recovery.
+
 ```sh
 npm run development:admin -- inspect --job-id JOB_UUID
 # After fixing transient Git/GitHub/database problems:
@@ -256,7 +258,7 @@ Recovery journals live at `<storage_root>/executions/<project-id>/<execution-job
 | Interrupted point                                           | Recovery behavior                                                                 |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Before Codex                                                | Prepared clean state can be retried                                               |
-| During Codex / ambiguous finish                             | Workspace is preserved and blocked; no blind rerun or publication                 |
+| During Codex / ambiguous finish                             | Explicit retry checks the saved Git heads and preserved worktree before restart   |
 | Verification fails                                          | Changes and failure metadata remain; nothing is pushed or made into a PR          |
 | Verified but not committed                                  | Retry commits the recorded, inspected tree after checking the live workspace      |
 | Commit succeeds before local checkpoint                     | Exact parent/tree/job marker reconcile the commit without creating another        |
@@ -267,7 +269,7 @@ Recovery journals live at `<storage_root>/executions/<project-id>/<execution-job
 | Unexpected remote head, local commit or changed files       | Block and preserve; no force push, reset, rebase or automatic conflict resolution |
 | PR closed, merged or marked ready manually                  | Record observed state and block further automated modification                    |
 
-`retry` accepts prepared or verified/publication stages, only failed/blocked jobs, fewer than three claims, and no active execution on that branch. Earlier attempt results remain intact. A running job with a valid journal uses normal lease/journal recovery; after an expired lease the existing queue reclaims it. Unverified `executing`/`executed` state is not administratively requeued by this command. Inspect and preserve it manually, then submit a fresh independent job with corrected instructions; if there is already a published PR, a revision can proceed only once that branch is clean and publication has been reconciled. Do not silently discard prior edits to unblock a branch.
+`retry` accepts failed or blocked jobs below the three-claim limit, with all prerequisite PRs merged and no active or newer work on the branch. It preserves previous execution records. A development retry goes to the worker that last claimed it so it can inspect the existing worktree. Changed source, failed verification, or a changed Git head requires operator review. Ordinary lease recovery still resumes verified publication checkpoints and blocks interrupted Codex execution for inspection.
 
 Cleanup refuses active/queued work, conflicts, any uncommitted/untracked/**ignored** content, unpublished commits, changed remote heads or PR/head mismatches. It runs ordinary `git worktree remove` with no force flag and retains the branch, PR and all database history. A dependency symlink or ignored build output must be deliberately archived/removed by an administrator before cleanup. Merged branches deleted on GitHub are conservatively refused by automated cleanup; archive locally after manual review instead. No wildcard deletion or automatic branch deletion is provided.
 

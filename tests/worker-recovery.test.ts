@@ -170,3 +170,61 @@ test("all recovery journals are validated before claims and unreadable state is 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a retry can journal a new claim while the previous terminal report is still in flight", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "conduit-retry-"));
+  const firstReport = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let attempt = 0;
+  const call: Call = async (path, body: any) => {
+    if (path === "/api/heartbeat") return {};
+    if (path === "/api/claim") {
+      attempt++;
+      return {
+        job: {
+          id: "same-job",
+          attempt_count: attempt,
+          claim_token: `token-${attempt}`,
+          task: "simulate-failure",
+        },
+      };
+    }
+    if (body.action === "failed") {
+      if (body.claim_token === "token-2")
+        throw Error("Retry report disconnected");
+      firstReport.resolve();
+      await release.promise;
+    }
+    return {};
+  };
+  const first = cycle(
+    call,
+    dir,
+    async () => {},
+    () => false,
+    null,
+  );
+  try {
+    await firstReport.promise;
+    await assert.rejects(
+      cycle(
+        call,
+        dir,
+        async () => {},
+        () => false,
+        null,
+      ),
+      /Retry report disconnected/,
+    );
+    assert.equal((await recoverJournals(dir)).length, 2);
+    release.resolve();
+    await first;
+    assert.deepEqual(await recoverJournals(dir), [
+      join(dir, "journal-same-job-attempt-2.json"),
+    ]);
+  } finally {
+    release.resolve();
+    await first;
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -9,8 +9,18 @@ import { requiredScope } from "./keys";
 import { authenticateConsole } from "./auth";
 import { z } from "zod";
 import type { DB } from "./db";
-import { claim, report, publicColumns, workerAvailableSql } from "./queue";
+import {
+  claim,
+  report,
+  retryJob,
+  publicColumns,
+  workerAvailableSql,
+  MAX_ATTEMPTS,
+} from "./queue";
 const uuid = z.string().uuid();
+const retryBody = z
+  .object({ expected_attempt_count: z.number().int().min(0).max(MAX_ATTEMPTS) })
+  .strict();
 const createJob = z
   .object({
     title: z.string().trim().min(1).max(200),
@@ -200,7 +210,7 @@ export async function handle(req: Request, db: DB): Promise<Response> {
           : { ok: true },
       );
     }
-    const match = path.match(/^\/api\/jobs\/([^/]+)(\/report)?$/);
+    const match = path.match(/^\/api\/jobs\/([^/]+)(?:\/(report|retry))?$/);
     if (match) {
       const id = uuid.parse(match[1]);
       if (method === "GET" && !match[2]) {
@@ -212,7 +222,18 @@ export async function handle(req: Request, db: DB): Promise<Response> {
         );
         return job ? json({ job }) : json({ error: "Not found" }, 404);
       }
-      if (method === "POST" && match[2]) {
+      if (method === "POST" && match[2] === "retry") {
+        if (key.role !== "submitter") return json({ error: "Forbidden" }, 403);
+        const input = retryBody.parse(await body(req));
+        const job = await retryJob(
+          db,
+          id,
+          key.principal,
+          input.expected_attempt_count,
+        );
+        return json({ job });
+      }
+      if (method === "POST" && match[2] === "report") {
         const input = reportBody.parse(await body(req));
         const job = await report(
           db,

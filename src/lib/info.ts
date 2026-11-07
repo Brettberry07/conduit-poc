@@ -26,6 +26,7 @@ export function info(request: Request): Response {
     capabilities: [
       "Idempotent job creation via Idempotency-Key",
       "Job status and result retrieval",
+      "Same-job retry for eligible failed or blocked jobs",
       "Worker availability reporting",
       "Durable owner-scoped event feed, job and initiative activity history, and consumer checkpoints",
     ],
@@ -60,6 +61,7 @@ export function info(request: Request): Response {
       "POST /api/agent/event-consumers/{name}/ack",
       "POST /api/jobs",
       "GET /api/jobs/{id}",
+      "POST /api/jobs/{id}/retry",
       "GET /api/workers",
       "POST /api/claim",
       "POST /api/heartbeat",

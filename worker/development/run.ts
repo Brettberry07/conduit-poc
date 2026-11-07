@@ -50,6 +50,7 @@ type State = {
     | "committed"
     | "pushed"
     | "published";
+  execution_attempt?: number;
   execution?: Execution;
   changes?: Changes;
   head?: string;
@@ -238,19 +239,6 @@ export async function executeDevelopment(
           )
         : base;
       await createWorktree(repo, workspace, publication.branch, start);
-      await assertHead(workspace, publication.branch, start);
-      if (
-        (
-          await git(workspace, [
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-          ])
-        ).trim()
-      )
-        throw new Blocked(
-          "Worktree has unpublished changes; administrator recovery required",
-        );
       state = {
         version: 1,
         job_id: job.id,
@@ -269,9 +257,43 @@ export async function executeDevelopment(
         publication.branch,
         state.head ?? state.start,
       );
-      if (state.stage === "executing")
+      if (state.stage === "executing") {
+        if (
+          !job.explicit_retry ||
+          !job.attempt_count ||
+          state.execution_attempt === job.attempt_count
+        ) {
+          throw new Blocked(
+            "Interrupted Codex execution; inspect the preserved worktree before requesting retry",
+          );
+        }
+        const remote = await network.head(
+          repo,
+          p.repository_url,
+          publication.branch,
+          github.gitToken(),
+        );
+        if (remote !== state.expected_remote)
+          throw new Blocked(
+            "Remote branch changed since the interrupted execution",
+          );
+        state.stage = "prepared";
+      }
+    }
+    if (state.stage === "prepared") {
+      await assertHead(workspace, publication.branch, state.start);
+      if (
+        (
+          await git(workspace, [
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+          ])
+        ).trim()
+      )
         throw new Blocked(
-          "Interrupted Codex execution has preserved workspace changes; inspect them before administrator recovery",
+          "Worktree has unpublished changes; administrator recovery required",
         );
     }
     await phase("running", {
@@ -287,6 +309,7 @@ export async function executeDevelopment(
     };
     if (state.stage === "prepared") {
       await assertHead(workspace, publication.branch, state.start);
+      state.execution_attempt = job.attempt_count;
       state.stage = "executing";
       await save();
       state.execution = await (dependencies?.execute ?? executeWorktree)(

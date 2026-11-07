@@ -77,7 +77,7 @@ export function requiredScope(path: string, method: string): Scope | null {
       ))
   )
     return "jobs:read";
-  if (method === "POST" && /^\/api\/jobs\/[^/]+\/revisions$/.test(path))
+  if (method === "POST" && /^\/api\/jobs\/[^/]+\/(revisions|retry)$/.test(path))
     return "jobs:revise";
   if (
     method === "POST" &&

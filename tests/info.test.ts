@@ -28,6 +28,7 @@ test("public info describes implemented capabilities without runtime details", a
     "POST /api/agent/event-consumers/{name}/ack",
     "POST /api/jobs",
     "GET /api/jobs/{id}",
+    "POST /api/jobs/{id}/retry",
     "GET /api/workers",
     "POST /api/claim",
     "POST /api/heartbeat",

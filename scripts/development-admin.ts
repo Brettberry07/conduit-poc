@@ -12,6 +12,7 @@ import {
   validateRepository,
 } from "../worker/development/git";
 import { GitHub, type Project } from "../worker/development/github";
+import { retryJob } from "../src/lib/queue";
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: { "job-id": { type: "string" } },
@@ -26,7 +27,7 @@ async function main() {
     const {
       rows: [record],
     } = await db.query(
-      `SELECT j.id,j.root_job_id,j.status,j.attempt_count,t.*,row_to_json(p) AS project_record FROM orchestrator.jobs j JOIN orchestrator.development_tasks t ON t.job_id=j.root_job_id JOIN orchestrator.projects p ON p.id=t.project_id WHERE j.id=$1`,
+      `SELECT j.id,j.root_job_id,j.status,j.attempt_count,j.submitter_id,t.*,row_to_json(p) AS project_record FROM orchestrator.jobs j JOIN orchestrator.development_tasks t ON t.job_id=j.root_job_id JOIN orchestrator.projects p ON p.id=t.project_id WHERE j.id=$1`,
       [id],
     );
     if (!record) throw Error("Development job not found");
@@ -71,22 +72,28 @@ async function main() {
     }
     if (command === "retry") {
       if (
-        !["prepared", "verified", "committed", "pushed", "published"].includes(
-          state.stage,
-        )
+        ![
+          "prepared",
+          "executing",
+          "executed",
+          "verified",
+          "committed",
+          "pushed",
+          "published",
+        ].includes(state.stage)
       )
         throw Error(
-          "Only intact prepared or verified publication state can be retried. Interrupted execution/unverified edits require manual inspection and a fresh job.",
+          "A known execution or publication checkpoint is required for retry",
         );
-      const { rowCount } = await db.query(
-        `UPDATE orchestrator.jobs SET status='queued',completed_at=NULL,error=NULL,phase=NULL WHERE id=$1 AND status IN ('failed','blocked') AND attempt_count<3 AND NOT EXISTS(SELECT 1 FROM orchestrator.jobs active WHERE active.root_job_id=$2 AND active.status='running')`,
-        [id, record.root_job_id],
+      const job = await retryJob(
+        db,
+        id,
+        record.submitter_id,
+        record.attempt_count,
       );
-      if (!rowCount)
-        throw Error(
-          "Job is active, exhausted, or otherwise not eligible for safe retry",
-        );
-      console.log("Queued recovery; prior execution attempt remains recorded");
+      console.log(
+        `Recovery status: ${job.status}; prior execution attempts remain recorded`,
+      );
       return;
     }
     if (
