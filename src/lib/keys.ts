@@ -28,13 +28,17 @@ export type Identity = {
 export async function authenticate(
   db: DB,
   authorization: string,
+  { recordUsage = true } = {},
 ): Promise<Identity | null> {
   if (!/^Bearer cnd_live_[A-Za-z0-9_-]{43}$/.test(authorization)) return null;
   const {
     rows: [key],
-  } = await db.query("SELECT * FROM orchestrator.authenticate_api_key($1)", [
-    hashKey(authorization.slice(7)),
-  ]);
+  } = await db.query(
+    recordUsage
+      ? "SELECT * FROM orchestrator.authenticate_api_key($1)"
+      : "SELECT * FROM orchestrator.inspect_api_key($1)",
+    [hashKey(authorization.slice(7))],
+  );
   return key ?? null;
 }
 export function requiredScope(path: string, method: string): Scope | null {
@@ -64,6 +68,7 @@ export function requiredScope(path: string, method: string): Scope | null {
   if (
     method === "GET" &&
     (path === "/api/agent/manifest" ||
+      path === "/api/agent/monitor" ||
       path === "/api/agent/events" ||
       /^\/api\/agent\/event-consumers\/[^/]+$/.test(path) ||
       /^\/api\/projects(?:\/[^/]+)?$/.test(path) ||

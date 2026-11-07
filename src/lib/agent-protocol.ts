@@ -8,6 +8,9 @@ import {
   activationInput,
 } from "./initiatives";
 import { DevelopmentError } from "./development";
+import { DEFAULT_EVENT_PAGE_SIZE } from "./event-api";
+import { MONITOR_ATTENTION_LIMIT } from "./monitor-api";
+import { WORKER_HEARTBEAT_FRESH_SECONDS } from "./queue";
 import {
   DEVELOPMENT_BODY_LIMIT,
   RESEARCH_BYTE_LIMIT,
@@ -18,7 +21,7 @@ import {
 // capabilities, excluding only runtime enforcement state and the hash itself.
 export const protocol = {
   service: "Conduit",
-  protocol_version: "5c.1",
+  protocol_version: "5d.1",
   description:
     "Scoped development orchestration with local coding, verification and draft PR review",
   supported_task_types: [
@@ -30,6 +33,7 @@ export const protocol = {
   endpoints: {
     manifest: "GET /api/agent/manifest",
     capabilities: "GET /info",
+    monitor: "GET /api/agent/monitor?consumer={name}",
     events: "GET /api/agent/events",
     event_consumer: "GET /api/agent/event-consumers/{name}",
     acknowledge_events: "POST /api/agent/event-consumers/{name}/ack",
@@ -108,7 +112,7 @@ export const protocol = {
     delivery: "At least once with an explicit durable checkpoint",
     read_scope: "jobs:read",
     acknowledge_scope: "jobs:revise",
-    default_page_size: 50,
+    default_page_size: DEFAULT_EVENT_PAGE_SIZE,
     maximum_page_size: 100,
     feed: "Use after=0 for replay or after=<saved cursor>. An empty page preserves after.",
     history:
@@ -122,6 +126,42 @@ export const protocol = {
     },
     conflict:
       "On 409, reload the checkpoint before continuing. Retry a timed-out acknowledgement with the same body.",
+  },
+  monitoring_contract: {
+    version: 1,
+    read_scope: "jobs:read",
+    consumer_example: "instinct-primary",
+    event_page_size: DEFAULT_EVENT_PAGE_SIZE,
+    attention_limit: MONITOR_ATTENTION_LIMIT,
+    response: {
+      server_time: "UTC database observation time",
+      consumer:
+        "The Phase 5C checkpoint for this owner and name, including acknowledgement time",
+      activity:
+        "First unfiltered event page after consumer.acknowledged_cursor. Continue at next_after with /api/agent/events while has_more is true.",
+      overview:
+        "Owned active initiative count and current job counts for standalone work and active or paused initiatives",
+      attention:
+        "Bounded current conditions with condition_id, type, related IDs, reason and details_url. These are observations, not user notification decisions.",
+      attention_has_more:
+        "Use owned initiative resume and job listings to reconcile additional current work",
+      worker_readiness:
+        "Shared worker-pool heartbeat counts and latest heartbeat time, with a link to /api/workers",
+    },
+    worker_heartbeat_fresh_seconds: WORKER_HEARTBEAT_FRESH_SECONDS,
+    defaults: {
+      cadence_minutes: 60,
+      active_development_cadence_minutes: 15,
+      worker_alert_grace_minutes: 5,
+      maximum_event_pages_per_check: 5,
+      maximum_pr_reviews_per_check: 2,
+    },
+    profiles: {
+      watch_only:
+        "Read activity and evidence, identify problems, and report meaningful developments. The only Conduit write is acknowledgement of processed events, when authorized.",
+      pm_autonomous:
+        "Also review completed work and record initiative PM assessments. Request justified same-PR revisions only within previously authorized implementation scope. Escalate consequential decisions.",
+    },
   },
   policy: {
     field: "policy_version",
@@ -196,6 +236,55 @@ export const protocol = {
       "For pull_request.merged_observed, read current initiative state and let the existing queue resolve dependencies. Treat the time as a Conduit observation. Preserve human control of merge and deployment.",
       "For initiative.review_recorded, use data.review_id with the initiative reviews endpoint's review_id filter if evidence is needed. Treat assessments you already recorded or acted on as informational. Check current review and revision history before acting on any assessment, and use stable idempotency keys for the same actions across retries. Never turn replay or your own review into another revision.",
     ],
+    monitoring: {
+      setup: [
+        "Configure one recurring Instinct task per Conduit owner with a saved credential, an explicit profile and a stable, configurable consumer name. Confirm recurring authenticated requests, private durable state between runs, and proactive messaging before enabling the task. Use the owner's existing checkpoints. A read-only credential can inspect the snapshot, but a durable consumer needs jobs:revise to acknowledge. Profiles are instructions and never grant permissions.",
+        "Start hourly. Use a 15-minute cadence only with explicit user agreement and confirmed Instinct support. Idle checks may be hourly or less frequent. Checks are best effort. Instinct controls scheduling; do not assume it can change cadence dynamically.",
+        "Never merge, deploy, delete repositories or change credentials during scheduled monitoring. A monitoring request authorizes observation only. The autonomous profile still requires explicit implementation scope for each revision. If that authorization cannot be recovered from durable user instructions or the saved request, report the finding without changing code.",
+      ],
+      cycle: [
+        "1. Fetch GET /api/agent/manifest at the start of every run. Follow its current endpoints, limits and policy version.",
+        "2. Load the same consumer checkpoint and current overview with GET /api/agent/monitor?consumer={name}, or GET /api/agent/event-consumers/{name} when using the separate endpoints. Keep cursors as strings. Use a private durable journal scoped to the owner and scheduled task for pending action bodies, reconciliation progress and message deduplication.",
+        "3. Process the included activity page or read GET /api/agent/events?after=<acknowledged_cursor>&limit=50. Follow next_after for subsequent pages in order. Never jump to the newest cursor or use filtered history as a checkpoint. Reconcile attention and worker readiness even if the event page is empty.",
+        "4. Classify events as informational progress, relevant to active work, evidence to review, failures to investigate, human decisions, or possible follow-ups. Use the priority guidance below. Confirm current state before acting on old activity. Related events about one job or PR may require only one evidence review.",
+        "5. Fetch job, initiative resume and other linked detail as needed. Check current status and phase, execution attempts, original intent, actual changed files and paginated diffs, recorded GitHub state, dependencies, assessments and revision history. Resolve stale or superseded events using current evidence.",
+        "6. Apply the configured profile. Record authorized PM assessments and request only justified revisions. Journal any intended update before acknowledging if it needs to survive interruption. Use stable action identities and persist exact request bodies and UUIDs before writing.",
+        "7. After required durable actions or decisions, POST /api/agent/event-consumers/{name}/ack with the highest contiguously processed cursor and expected_previous_cursor from the saved checkpoint. A partial page may acknowledge only its processed prefix. Stop at unfinished work and resume there. The snapshot never acknowledges events.",
+        "8. Send any meaningful update using Instinct messaging. Group by initiative and link evidence or PRs. A checkpoint or saved message intent does not establish external delivery.",
+      ],
+      initial_reconciliation: [
+        "Verify authentication, the manifest and the saved checkpoint. For a new consumer reconcile the current owned active or paused initiatives and relevant standalone jobs via the listings and detail endpoints, including pre-event work. Follow initiative next_before and job before pagination. Continue reconciliation across runs if needed; keep progress privately. Treat bounded attention as a starting point and use detail listings when attention_has_more is true.",
+        "Replay from the saved cursor, starting at zero for a new consumer. Coalesce historical changes into a current-state summary and surface outstanding actions only. Reuse existing reviews and revisions. Never seed the checkpoint at the newest event to skip reconciliation.",
+      ],
+      priorities: {
+        high: "Usually report at the next check after confirming an unrecoverable failure, unresolved human decision, exhausted revision budget, dependency blocked by failure or PR closure, or execution/publication issue requiring manual recovery.",
+        normal:
+          "Inspect evidence before reporting development completions, available draft PRs, completed same-PR revisions, new verification, and dependencies that have become ready. For an open unmerged prerequisite, report it as a dependency wait and identify any actionable human decision. Use current state to distinguish a ready PR from work already reviewed or superseded.",
+        low: "Claims, ordinary phase transitions, activations and progress without a blocker usually belong in a later digest. An initiative.review_recorded event can indicate a new decision or already-handled work. Read the referenced review when necessary and avoid triggering another action from your own review or revision events.",
+      },
+      autonomous_review: [
+        "Follow playbook.review. Retrieve the original request and acceptance criteria, the broader initiative goal, current job outcome, both applicable change artifacts and their paginated diffs, and all verification evidence. Distinguish passed, failed, skipped and unexecuted checks. Inspect the GitHub PR if authorized and available, compare the examined head with the observed head, and document missing or truncated evidence.",
+        "Decide whether the result is ready for human review, needs revision, is blocked or needs a decision. Record the assessment for a linked initiative task using its review endpoint and the examined head SHA. Standalone jobs have no Phase 5B assessment endpoint. Assessments confer no formal GitHub approval or permission to merge or deploy.",
+        "For a concrete issue within the existing implementation authorization, inspect the latest job, reviews and revision history immediately before submitting. For initiative work, require an active initiative. Reuse the existing open draft PR and commits via /revisions. Never substitute a new job or PR for an ordinary fix. Count prior revisions conservatively against the two autonomous attempts per root task unless durable records establish separate authorization. Escalate when the budget is exhausted or eligibility or history cannot be confirmed.",
+      ],
+      worker_readiness: [
+        "Use snapshot worker_readiness and GET /api/workers for individual heartbeat timestamps. Recent heartbeat indicates reported availability, not a free execution slot. Check owned queued_for_execution, active initiative dispatch and expired running leases for work that needs capacity. Dependency waits and paused jobs alone are not evidence of unavailable capacity.",
+        "For zero recent workers with work needing capacity, wait at least five minutes from the first qualifying observation and confirm again on a later check before alerting. If a heartbeat exists, require it to be at least five minutes old too. Track the condition even when the feed is empty. Describe observed heartbeat and lease state without guessing why the machine is unavailable. Recovery pending and a failed job are distinct states.",
+      ],
+      recovery: [
+        "Prefer one run at a time. If the scheduler permits overlap, use a shared durable run lock or serialize mutations and messaging in the private journal. If exclusive access cannot be established, defer autonomous writes and sends rather than racing another run.",
+        "On missed checks or lost context, reload the same checkpoint and private journal. Use at most five event pages and two PR reviews in an ordinary check, or stop sooner to leave time to save progress. If a limit or temporary failure prevents processing an event, acknowledge only the completed contiguous prefix. Events emitted during handling remain in the feed after that prefix.",
+        "On an ambiguous mutation retry, recover its saved UUID and exact body, inspect existing assessments and revision history, and retry only the same request if needed. Deduplicate reviews by job and examined head and revisions by the completed job being revised, independent of event ID or scheduled run. Check whether a newer revision has already superseded that job. A content conflict requires reconciliation, never a fresh key for the same action.",
+        "On an acknowledgement timeout, retry the exact body or read the saved checkpoint. On a conflict, reload and reconcile current state and pending actions before proceeding. Stop on expired credentials or permission failure and surface any required credential recovery through Instinct. Resume with the same consumer after access returns.",
+      ],
+      notifications: [
+        "Summarize related completions and outstanding decisions together. Prioritize actionable blockers. Explain what you reviewed or requested and what still needs the user. Skip messages for routine progress without a meaningful change.",
+        "Use event IDs for event-derived messages and stable condition IDs plus a material-state fingerprint for unresolved conditions. Use a stable owner/consumer-scoped worker-capacity key for a continuing outage. Keep first-seen time and the last reported fingerprint in private authenticated state shared across runs, without credentials. Clear a condition on confirmed resolution; absence from a truncated attention list does not confirm resolution.",
+        "Persist pending message intents before acknowledgement. Reconcile them even when the next event page is empty, and record the send outcome separately. Reuse any supported external message idempotency key. If a send outcome is unknown and external confirmation is unavailable, keep it ambiguous and avoid automatic repeated sends of the same update. Conduit does not observe or guarantee message delivery.",
+      ],
+      limitations:
+        "Conduit provides bounded current observations, at-least-once events and checkpoint storage. Instinct must provide scheduling, authorization context, private durable client state and messaging. Current PR observations may lag GitHub and no heartbeat proves a machine's cause or state. There is no standalone PM-assessment record, delivery receipt, scheduled-run lock, or server-enforced autonomous revision budget.",
+    },
     review: [
       "Retrieve job outcome, verification results, /changes, paginated /diff (follow next_offset), /publication and /executions where relevant. Review both execution and cumulative pull_request artifacts when appropriate; bounded or unavailable diffs are limitations, not proof of no changes.",
       "Compare actual implementation against acceptance criteria and the user's intent. For detailed work also evaluate research recommendations; the user's request remains authoritative. Distinguish checked evidence from untested behavior and external acceptance still needed.",
@@ -213,7 +302,7 @@ export const protocol = {
 };
 
 export function policyVersion(content: unknown = protocol): string {
-  return `5c-${createHash("sha256").update(JSON.stringify(content)).digest("hex")}`;
+  return `5d-${createHash("sha256").update(JSON.stringify(content)).digest("hex")}`;
 }
 export function agentManifest() {
   return {

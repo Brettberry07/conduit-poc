@@ -112,9 +112,10 @@ export async function authenticateConsole(
   authorization: string,
   base = process.env.NEXT_PUBLIC_SUPABASE_URL,
   verifier = verifyJwt,
+  keyOptions?: Parameters<typeof authenticate>[2],
 ): Promise<Identity | null | "unlinked"> {
   if (/^Bearer cnd_live_[A-Za-z0-9_-]{43}$/.test(authorization))
-    return authenticate(db, authorization);
+    return authenticate(db, authorization, keyOptions);
   if (!base || !authorization.startsWith("Bearer ")) return null;
   const sub = await verifier(authorization.slice(7), base);
   if (!sub) return null;

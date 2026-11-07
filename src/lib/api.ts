@@ -1,4 +1,5 @@
 import { eventApi } from "./event-api";
+import { monitorSnapshot } from "./monitor-api";
 import { initiativeApi } from "./initiative-api";
 import { developmentApi } from "./development-api";
 import { agentManifest } from "./agent-protocol";
@@ -8,7 +9,7 @@ import { requiredScope } from "./keys";
 import { authenticateConsole } from "./auth";
 import { z } from "zod";
 import type { DB } from "./db";
-import { claim, report, publicColumns } from "./queue";
+import { claim, report, publicColumns, workerAvailableSql } from "./queue";
 const uuid = z.string().uuid();
 const createJob = z
   .object({
@@ -92,14 +93,28 @@ async function body(req: Request, max = 32768) {
 export async function handle(req: Request, db: DB): Promise<Response> {
   try {
     const authorization = req.headers.get("authorization") ?? "";
-    const key = await authenticateConsole(db, authorization);
+    const url = new URL(req.url);
+    const path = url.pathname;
+    const method = req.method;
+    const monitor = method === "GET" && path === "/api/agent/monitor";
+    const key = await authenticateConsole(
+      db,
+      authorization,
+      undefined,
+      undefined,
+      {
+        recordUsage: !monitor,
+      },
+    );
     if (key === "unlinked") return json({ error: "account not linked" }, 403);
     if (!key) return json({ error: "Unauthorized" }, 401);
-    const path = new URL(req.url).pathname;
-    const method = req.method;
     const scope = requiredScope(path, method);
     if (!scope) return json({ error: "Not found" }, 404);
     if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
+    if (monitor) {
+      if (key.role !== "submitter") return json({ error: "Forbidden" }, 403);
+      return json(await monitorSnapshot(db, key.principal, url.searchParams));
+    }
     if (method === "GET" && path === "/api/agent/manifest")
       return json(agentManifest());
     const events = await eventApi(req, db, key, body);
@@ -165,7 +180,7 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     }
     if (method === "GET" && path === "/api/workers") {
       const { rows } = await db.query(`SELECT worker_id,last_seen_at,
-      last_seen_at>clock_timestamp()-interval '15 seconds' AS available,
+      ${workerAvailableSql} AS available,
       EXISTS(SELECT 1 FROM orchestrator.jobs j WHERE j.worker_id=w.worker_id AND status='running'
         AND lease_expires_at>clock_timestamp()) AS busy FROM orchestrator.workers w ORDER BY worker_id`);
       return json({ workers: rows });

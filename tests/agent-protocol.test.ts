@@ -41,8 +41,18 @@ test("policy hashes all operational content deterministically without runtime se
   const changed = structuredClone(protocol);
   changed.playbook.review.push("Another review requirement");
   assert.notEqual(policyVersion(), policyVersion(changed));
+  const monitoringChanged = structuredClone(protocol);
+  monitoringChanged.playbook.monitoring.cycle.push(
+    "Another monitoring requirement",
+  );
+  assert.notEqual(policyVersion(), policyVersion(monitoringChanged));
   assert.equal(agentManifest().policy_version, policyVersion());
-  assert.match(policyVersion(), /^5c-[0-9a-f]{64}$/);
+  assert.match(policyVersion(), /^5d-[0-9a-f]{64}$/);
+  assert.equal(agentManifest().monitoring_contract.version, 1);
+  assert.deepEqual(Object.keys(agentManifest().monitoring_contract.profiles), [
+    "watch_only",
+    "pm_autonomous",
+  ]);
   assert.equal(agentManifest().endpoints.events, "GET /api/agent/events");
   assert.deepEqual(agentManifest().event_contract, protocol.event_contract);
   assert.equal(

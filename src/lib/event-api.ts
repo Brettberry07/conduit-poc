@@ -13,7 +13,8 @@ const pageSize = z
   .regex(/^(100|[1-9][0-9]?)$/)
   .transform(Number);
 const uuid = z.string().uuid();
-const consumerName = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+export const consumerName = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+export const DEFAULT_EVENT_PAGE_SIZE = 50;
 const acknowledgement = z
   .object({
     cursor,
@@ -51,7 +52,7 @@ async function listEvents(db: DB, owner: string, params: URLSearchParams) {
   if (params.size !== new Set(params.keys()).size)
     throw new DevelopmentError("Repeated event query parameter", 400);
 
-  const limit = query.limit ?? 50;
+  const limit = query.limit ?? DEFAULT_EVENT_PAGE_SIZE;
   const filter = query.initiative_id ?? query.job_id;
   if (filter) {
     if (query.after !== undefined || (query.initiative_id && query.job_id))
@@ -80,7 +81,15 @@ async function listEvents(db: DB, owner: string, params: URLSearchParams) {
       "before is only available for filtered history",
       400,
     );
-  const after = query.after ?? "0";
+  return json(await readEventPage(db, owner, query.after ?? "0", limit));
+}
+
+export async function readEventPage(
+  db: DB,
+  owner: string,
+  after: string,
+  limit = DEFAULT_EVENT_PAGE_SIZE,
+) {
   await requireOwnedCursor(db, owner, after);
   const { rows } = await db.query(
     `SELECT ${columns},cursor::text FROM orchestrator.events WHERE owner=$1 AND cursor>$2::bigint
@@ -88,11 +97,26 @@ async function listEvents(db: DB, owner: string, params: URLSearchParams) {
     [owner, after, limit + 1],
   );
   const events = rows.slice(0, limit);
-  return json({
+  return {
     events,
     next_after: events.at(-1)?.cursor ?? after,
     has_more: rows.length > limit,
-  });
+  };
+}
+
+export async function readEventConsumer(db: DB, owner: string, name: string) {
+  const { rows } = await db.query(
+    `SELECT ${checkpointColumns} FROM orchestrator.event_consumers WHERE owner=$1 AND name=$2`,
+    [owner, name],
+  );
+  return (
+    rows[0] ?? {
+      name,
+      acknowledged_cursor: "0",
+      created_at: null,
+      acknowledged_at: null,
+    }
+  );
 }
 
 export async function eventApi(
@@ -112,20 +136,8 @@ export async function eventApi(
   if (isFeed) return listEvents(db, owner, url.searchParams);
 
   const name = consumerName.parse(match?.[1]);
-  if (req.method === "GET") {
-    const { rows } = await db.query(
-      `SELECT ${checkpointColumns} FROM orchestrator.event_consumers WHERE owner=$1 AND name=$2`,
-      [owner, name],
-    );
-    return json({
-      consumer: rows[0] ?? {
-        name,
-        acknowledged_cursor: "0",
-        created_at: null,
-        acknowledged_at: null,
-      },
-    });
-  }
+  if (req.method === "GET")
+    return json({ consumer: await readEventConsumer(db, owner, name) });
 
   const ack = acknowledgement.parse(await readBody(req, 1024));
   if (BigInt(ack.cursor) < BigInt(ack.expected_previous_cursor))

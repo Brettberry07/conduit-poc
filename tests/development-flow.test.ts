@@ -330,6 +330,13 @@ policyTest(
           ).json();
           assert.equal(diff.diff.length, 16);
           assert.equal(diff.next_offset, 16);
+          const monitor = await req("/api/agent/monitor?consumer=review-flow");
+          assert.equal(monitor.status, 200);
+          assert.ok(
+            (await monitor.json()).attention.some(
+              (a: any) => a.type === "review_pr" && a.job_id === root.id,
+            ),
+          );
           assert.equal(
             (
               await req(
@@ -371,6 +378,33 @@ policyTest(
               instructions: "Revise existing changes",
               acceptance_criteria: "Checks pass",
             };
+          const readActivity = async (after: string) => {
+            const response = await req(
+              `/api/agent/events?after=${after}&limit=50`,
+            );
+            assert.equal(response.status, 200);
+            return response.json();
+          };
+          let page = await readActivity("0");
+          while (
+            page.has_more &&
+            !page.events.some(
+              (e: any) => e.type === "job.completed" && e.job_id === root.id,
+            )
+          ) {
+            page = await readActivity(page.next_after);
+          }
+          const completed = page.events.findIndex(
+            (e: any) => e.type === "job.completed" && e.job_id === root.id,
+          );
+          assert.ok(completed > 0);
+          const prior = page.events[completed - 1].cursor;
+          const ack = (cursor: string, expected_previous_cursor: string) =>
+            req("/api/agent/event-consumers/review-flow/ack", "POST", {
+              cursor,
+              expected_previous_cursor,
+            });
+          assert.equal((await ack(prior, "0")).status, 200);
           const a = await req(
             `/api/jobs/${root.id}/revisions`,
             "POST",
@@ -380,6 +414,15 @@ policyTest(
           );
           assert.equal(a.status, 201);
           revision = (await a.json()).job;
+          // The revision committed, but this run stopped before acknowledging the completion.
+          const restarted = await (
+            await req("/api/agent/monitor?consumer=review-flow")
+          ).json();
+          assert.equal(restarted.consumer.acknowledged_cursor, prior);
+          assert.equal(
+            restarted.activity.events[0].id,
+            page.events[completed].id,
+          );
           assert.equal(
             (
               await (
@@ -393,6 +436,14 @@ policyTest(
               ).json()
             ).job.id,
             revision.id,
+          );
+          const completionCursor = page.events[completed].cursor;
+          const accepted = await (await ack(completionCursor, prior)).json();
+          assert.equal(accepted.consumer.acknowledged_cursor, completionCursor);
+          // The acknowledgement may have committed before its response arrived.
+          assert.deepEqual(
+            await (await ack(completionCursor, prior)).json(),
+            accepted,
           );
           const otherRevision = (
             await (
@@ -437,6 +488,15 @@ policyTest(
           assert.equal(update.root_job_id, root.id);
           assert.equal(update.data.number, 42);
           assert.equal(update.data.head_commit, outcome.result.head_commit);
+          const afterRevision = await readActivity(completionCursor);
+          assert.ok(
+            afterRevision.events.some(
+              (e: any) =>
+                e.type === "job.completed" &&
+                e.job_id === revision.id &&
+                e.root_job_id === root.id,
+            ),
+          );
           assert.equal(
             revisionEvents.some(
               (event: any) => event.type === "pull_request.created",

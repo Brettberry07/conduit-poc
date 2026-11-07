@@ -1,6 +1,8 @@
 import { transaction, type DB } from "./db";
 export const LEASE_SECONDS = 30;
 export const MAX_RUNNING_JOBS_PER_OWNER = 4;
+export const WORKER_HEARTBEAT_FRESH_SECONDS = 15;
+export const workerAvailableSql = `w.last_seen_at>statement_timestamp()-interval '${WORKER_HEARTBEAT_FRESH_SECONDS} seconds'`;
 export const publicColumns = `id,title,description,task,instructions,acceptance_criteria,original_request,development_mode,policy_version,accepted_policy_version,research,project,project_id,root_job_id,base_branch,dependency_job_ids,phase,status,created_at,claimed_at,completed_at,worker_id,result,error,attempt_count,lease_expires_at,progress`;
 export async function claim(db: DB, worker: string) {
   // Dependencies require actual GitHub merge reconciliation, never job completion alone.

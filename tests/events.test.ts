@@ -10,12 +10,14 @@ import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { applyMigrations } from "../scripts/migrations";
 import { handle } from "../src/lib/api";
+import type { PooledDB } from "../src/lib/db";
 import { policyVersion } from "../src/lib/agent-protocol";
 import { credentialScopes, generateKey, hashKey } from "../src/lib/keys";
 import { examplePlan } from "./helpers/initiatives";
 
 const feed = "/api/agent/events";
 const consumer = "/api/agent/event-consumers/instinct-primary";
+const monitorPath = "/api/agent/monitor?consumer=instinct-primary";
 const secret = "github_pat_SHOULD_NEVER_ENTER_EVENTS";
 const head = "a".repeat(40);
 
@@ -212,6 +214,21 @@ test(
       assert.ok(first.has_more);
       const firstAck = await ok(ack(first.next_after, "0"));
       assert.deepEqual(await ok(ack(first.next_after, "0")), firstAck);
+      const initialSnapshot = await get(monitorPath, "viewer");
+      assert.deepEqual(initialSnapshot.consumer, firstAck.consumer);
+      assert.deepEqual(initialSnapshot.activity, await read(first.next_after));
+      assert.deepEqual(initialSnapshot.overview, {
+        active_initiatives: 1,
+        running_jobs: 0,
+        waiting_jobs: 4,
+        queued_for_execution: 2,
+        failed_jobs: 0,
+        awaiting_review: 0,
+      });
+      assert.deepEqual(
+        initialSnapshot.attention.map((a: any) => a.type),
+        ["wait_for_dependency", "wait_for_dependency"],
+      );
 
       const claim = () => worker("/api/claim");
       const [{ job: one }, { job: two }] = await Promise.all([
@@ -226,6 +243,28 @@ test(
         ]),
       );
       assert.equal((await claim()).job, null);
+      const executing = await get(monitorPath);
+      assert.equal(executing.overview.running_jobs, 2);
+      assert.equal(executing.worker_readiness.available_workers, 1);
+      assert.ok(
+        !executing.attention.some((a: any) => a.type === "job.claimed"),
+      );
+      await admin.query(
+        "UPDATE orchestrator.jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [one.id],
+      );
+      const expired = await get(monitorPath);
+      assert.deepEqual(expired.activity, executing.activity);
+      assert.equal(expired.overview.failed_jobs, 0);
+      assert.ok(
+        expired.attention.some(
+          (a: any) => a.type === "recovery_pending" && a.job_id === one.id,
+        ),
+      );
+      await admin.query(
+        "UPDATE orchestrator.jobs SET lease_expires_at=clock_timestamp()+interval '30 seconds' WHERE id=$1",
+        [one.id],
+      );
       await ok(
         request(path, "PATCH", { expected_status: "active", status: "paused" }),
       );
@@ -345,6 +384,21 @@ test(
         missed.events.find((e: any) => e.type === "job.completed").data,
         { attempt: 1, result_available: true, verification_status: "passed" },
       );
+      const reviewSnapshot = await get(monitorPath);
+      assert.equal(reviewSnapshot.overview.active_initiatives, 0);
+      assert.equal(reviewSnapshot.overview.awaiting_review, 2);
+      assert.deepEqual(
+        new Set(
+          reviewSnapshot.attention
+            .filter((a: any) => a.type === "review_pr")
+            .map((a: any) => a.details_url),
+        ),
+        new Set([`/api/jobs/${one.id}`, `/api/jobs/${two.id}`]),
+      );
+      assert.doesNotMatch(
+        JSON.stringify(reviewSnapshot),
+        new RegExp(`${secret}|/Users/|claim_token|${one.claim_token}`),
+      );
 
       const reviewId = randomUUID();
       const assessment = {
@@ -448,6 +502,18 @@ test(
         (await get(consumer, "other")).consumer.acknowledged_cursor,
         "0",
       );
+      const otherSnapshot = await get(monitorPath, "other");
+      assert.deepEqual(otherSnapshot.activity.events, []);
+      assert.deepEqual(otherSnapshot.attention, []);
+      assert.ok(Object.values(otherSnapshot.overview).every((n) => n === 0));
+      assert.equal(
+        (await request(monitorPath, "GET", undefined, "worker")).status,
+        403,
+      );
+      assert.equal(
+        (await request(path + "/reviews", "POST", assessment, "viewer")).status,
+        403,
+      );
       const ackBody = {
         cursor: replay.next_after,
         expected_previous_cursor: "0",
@@ -537,6 +603,19 @@ test(
           pull_request: pr,
         });
       await observed(one.id, { ...prFor(1), state: "closed" });
+      const closed = await get(monitorPath);
+      assert.ok(
+        closed.attention.some(
+          (a: any) => a.type === "pr_closed" && a.job_id === one.id,
+        ),
+      );
+      assert.ok(
+        closed.attention.some(
+          (a: any) =>
+            a.type === "dependency_blocked" &&
+            a.job_id === jobIds.get("claude-provider"),
+        ),
+      );
       await observed(one.id, { ...prFor(1), state: "closed" });
       await observed(one.id, { ...prFor(1), state: "closed", merged: true });
       await observed(one.id, prFor(1)); // A stale open observation must preserve a recorded merge.
@@ -546,6 +625,19 @@ test(
       assert.equal(downstream.id, jobIds.get("claude-provider"));
       await terminal(downstream, "failed");
       assert.equal((await claim()).job, null);
+      const failing = await get(monitorPath);
+      assert.equal(failing.overview.failed_jobs, 2);
+      assert.ok(
+        failing.attention.some(
+          (a: any) =>
+            a.type === "inspect_failure" && a.job_id === downstream.id,
+        ),
+      );
+      assert.ok(
+        failing.activity.events.some(
+          (e: any) => e.type === "job.failed" && e.job_id === downstream.id,
+        ),
+      );
       await ok(
         request(path, "PATCH", {
           expected_status: "active",
@@ -659,6 +751,12 @@ test(
         await connection.query("SET ROLE events_untrusted");
         await assert.rejects(
           connection.query("SELECT * FROM orchestrator.events"),
+          /permission denied/,
+        );
+        await assert.rejects(
+          connection.query("SELECT * FROM orchestrator.inspect_api_key($1)", [
+            hashKey(keys.owner.token),
+          ]),
           /permission denied/,
         );
       } finally {
@@ -867,6 +965,175 @@ test(
         a.release();
         b.release();
       }
+    });
+  },
+);
+
+test(
+  "monitor bounds activity and attention while preserving read-only checkpoints and heartbeat observations",
+  { timeout: 30000 },
+  async () => {
+    await withDatabase(async (admin, runtime) => {
+      const { token, hash, prefix } = generateKey();
+      await admin.query(
+        `INSERT INTO orchestrator.api_keys(key_hash,principal,role,name,key_prefix,scopes,expires_at)
+       VALUES($1,'snapshot-owner','submitter','Snapshot fixture',$2,$3,clock_timestamp()+interval '1 hour')`,
+        [hash, prefix, credentialScopes.instinct],
+      );
+      const request = (path: string, body?: object, db = runtime as PooledDB) =>
+        handle(
+          new Request("http://localhost" + path, {
+            method: body ? "POST" : "GET",
+            headers: {
+              Authorization: "Bearer " + token,
+              "Content-Type": "application/json",
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+          }),
+          db,
+        );
+      const snapshot = async (db?: PooledDB) => {
+        const response = await request(monitorPath, undefined, db);
+        assert.equal(response.status, 200, await response.clone().text());
+        return response.json();
+      };
+      const ack = async (cursor: string, expected_previous_cursor: string) => {
+        const response = await request(consumer + "/ack", {
+          cursor,
+          expected_previous_cursor,
+        });
+        assert.equal(response.status, 200);
+        return (await response.json()).consumer;
+      };
+      const empty = await snapshot();
+      assert.equal(empty.worker_readiness.last_seen_at, null);
+      assert.equal(empty.activity.next_after, "0");
+      for (const query of [
+        "",
+        "?consumer=Invalid",
+        "?consumer=a&consumer=b",
+        "?consumer=a&after=0",
+        "?consumer=a&profile=pm_autonomous",
+      ]) {
+        assert.equal((await request("/api/agent/monitor" + query)).status, 400);
+      }
+      await admin.query(
+        `INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id,status,completed_at,error)
+       SELECT 'Private fixture','simulate-failure','snapshot-owner',gen_random_uuid(),'failed',clock_timestamp(),$1
+       FROM generate_series(1,55)`,
+        [secret],
+      );
+      await admin.query(
+        `INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id,status,worker_id,lease_expires_at)
+       VALUES ('Private running fixture','simulate-development','snapshot-owner',gen_random_uuid(),'running','mac',clock_timestamp()-interval '1 hour'),
+       ('Private queued fixture','simulate-development','snapshot-owner',gen_random_uuid(),'queued',NULL,NULL)`,
+      );
+      await admin.query(
+        "INSERT INTO orchestrator.workers(worker_id) VALUES ('mac')",
+      );
+      const page = await snapshot();
+      assert.equal(page.activity.events.length, 50);
+      assert.equal(page.activity.has_more, true);
+      assert.equal(page.attention.length, 20);
+      assert.equal(page.attention_has_more, true);
+      assert.equal(page.overview.failed_jobs, 55);
+      assert.equal(page.overview.running_jobs, 1);
+      assert.equal(page.overview.queued_for_execution, 1);
+      assert.equal(page.worker_readiness.available_workers, 1);
+      assert.deepEqual(page.consumer, empty.consumer);
+      assert.doesNotMatch(
+        JSON.stringify(page),
+        /Private fixture|SHOULD_NEVER_ENTER_EVENTS|claim_token|cnd_live_/,
+      );
+      assert.deepEqual(
+        (await admin.query("SELECT last_used_at FROM orchestrator.api_keys"))
+          .rows,
+        [{ last_used_at: null }],
+      );
+      assert.equal(
+        (await admin.query("SELECT 1 FROM orchestrator.event_consumers"))
+          .rowCount,
+        0,
+      );
+
+      const saved = await ack(page.activity.events[4].cursor, "0");
+      const resumed = await snapshot();
+      assert.deepEqual(resumed.consumer, saved);
+      assert.equal(resumed.activity.events[0].id, page.activity.events[5].id);
+      const remaining = await (
+        await request("/api/agent/events?after=" + resumed.activity.next_after)
+      ).json();
+      assert.equal(remaining.has_more, false);
+      const end = await ack(remaining.next_after, saved.acknowledged_cursor);
+      await admin.query(
+        "UPDATE orchestrator.workers SET last_seen_at=clock_timestamp()-interval '1 hour'",
+      );
+      const offline = await snapshot();
+      assert.deepEqual(offline.consumer, end);
+      assert.deepEqual(offline.activity, {
+        events: [],
+        next_after: end.acknowledged_cursor,
+        has_more: false,
+      });
+      assert.equal(offline.worker_readiness.available_workers, 0);
+      assert.equal(offline.worker_readiness.unavailable_workers, 1);
+      assert.ok(
+        Date.parse(offline.server_time) -
+          Date.parse(offline.worker_readiness.last_seen_at) >=
+          3600000,
+      );
+      const repeated = await snapshot();
+      assert.deepEqual(repeated.attention, offline.attention);
+      assert.deepEqual(repeated.worker_readiness, offline.worker_readiness);
+      assert.equal(repeated.overview.failed_jobs, 55);
+      await admin.query(
+        "UPDATE orchestrator.workers SET last_seen_at=clock_timestamp()",
+      );
+      const recovered = await snapshot();
+      assert.equal(recovered.worker_readiness.available_workers, 1);
+      assert.deepEqual(recovered.activity, offline.activity);
+
+      // Commit a source event and advance the checkpoint after the monitor has
+      // read its checkpoint, but before it reads the event page and overview.
+      const overlapping: PooledDB = {
+        query: (sql, values) => runtime.query(sql, values),
+        connect: async () => {
+          const client = await runtime.connect();
+          return {
+            release: (error) => client.release(error),
+            query: async (sql, values) => {
+              const result = await client.query(sql, values);
+              if (sql.includes("FROM orchestrator.event_consumers")) {
+                await admin.query(`INSERT INTO orchestrator.jobs(title,task,submitter_id,request_id)
+                  VALUES ('Arrived during read','simulate-development','snapshot-owner',gen_random_uuid())`);
+                const eventPage = await (
+                  await request(
+                    "/api/agent/events?after=" + end.acknowledged_cursor,
+                  )
+                ).json();
+                assert.equal(eventPage.events.length, 1);
+                await ack(eventPage.next_after, end.acknowledged_cursor);
+              }
+              return result;
+            },
+          };
+        },
+      };
+      const inFlight = await snapshot(overlapping);
+      assert.deepEqual(inFlight.consumer, end);
+      assert.deepEqual(inFlight.activity, recovered.activity);
+      assert.deepEqual(inFlight.overview, recovered.overview);
+      const next = await snapshot();
+      assert.notEqual(
+        next.consumer.acknowledged_cursor,
+        end.acknowledged_cursor,
+      );
+      assert.equal(next.overview.queued_for_execution, 2);
+
+      await admin.query(
+        "UPDATE orchestrator.api_keys SET expires_at=clock_timestamp()-interval '1 minute'",
+      );
+      assert.equal((await request(monitorPath)).status, 401);
     });
   },
 );

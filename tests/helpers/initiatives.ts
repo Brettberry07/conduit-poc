@@ -821,6 +821,18 @@ export async function checkInitiatives(
     }),
     201,
   );
+  const snapshot = async () =>
+    ok(await req("/api/agent/monitor?consumer=initiative-review"));
+  const decision = (await snapshot()).attention.find(
+    (a: any) =>
+      a.type === "needs_decision" && a.initiative_id === completeDraft.id,
+  );
+  assert.ok(decision);
+  assert.equal(decision.job_id, live.id);
+  assert.equal(
+    (await ok(await req(decision.details_url))).reviews[0].content.outcome,
+    "needs_decision",
+  );
   assert.equal(
     (
       await req(completeBase, "PATCH", {
@@ -837,6 +849,11 @@ export async function checkInitiatives(
       summary: "User acceptance decision recorded",
     }),
     201,
+  );
+  assert.ok(
+    !(await snapshot()).attention.some(
+      (a: any) => a.condition_id === decision.condition_id,
+    ),
   );
   const completion = await ok(
     await req(completeBase, "PATCH", {

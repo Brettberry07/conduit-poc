@@ -115,8 +115,9 @@ test(
         )
       ).rows[0];
       const applied = await applyMigrations(admin, true);
-      assert.equal(applied.length, 10);
-      assert.match(applied.at(-1)!, /phase_5c_events/);
+      assert.equal(applied.length, 11);
+      assert.match(applied.at(-2)!, /phase_5c_events/);
+      assert.match(applied.at(-1)!, /phase_5d_monitor_auth/);
       assert.equal(
         (
           await admin.query(
@@ -339,6 +340,16 @@ test(
           const valid = await request("/auth-check");
           assert.equal(valid.status, 200);
           assert.equal((await valid.json()).instinct_access, true);
+          const monitorPath = "/api/agent/monitor?consumer=http-monitor";
+          const snapshot = await request(monitorPath);
+          assert.equal(snapshot.status, 200);
+          assert.equal(snapshot.headers.get("cache-control"), "no-store");
+          assert.deepEqual((await snapshot.json()).activity, {
+            events: [],
+            next_after: "0",
+            has_more: false,
+          });
+          assert.equal((await fetch(origin + monitorPath)).status, 401);
           const workerCredential = JSON.parse(
             await readFile(workerFile, "utf8"),
           );
