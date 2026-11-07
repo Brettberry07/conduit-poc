@@ -36,11 +36,42 @@ type Data = {
   error: string;
 };
 const Context = createContext<Data>(null!);
+const iconPaths = {
+  brand: "M3 12V4h8M3 4l10 8M7 12h6V6",
+  board: "M2 3h12v10H2zM6 3v10M10 3v10",
+  active: "M1 8h3l2-5 4 10 2-5h3",
+  review: "M8 2l6 6-6 6-6-6zM8 5v3M8 11h.01",
+  sidebar: "M2 3h12v10H2zM6 3v10",
+  connection: "M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
+  search: "M10.5 10.5L14 14M11 6.5a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0",
+  external: "M9 2h5v5M14 2L7 9M6 3H2v11h11v-4",
+  close: "M4 4l8 8M12 4l-8 8",
+  arrow: "M2 8h12M9 3l5 5-5 5",
+};
+function Icon({ name }: { name: keyof typeof iconPaths }) {
+  return (
+    <svg
+      className="icon"
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={iconPaths[name]} />
+    </svg>
+  );
+}
 const routes = [
-  ["board", "▦", "Job board"],
-  ["active", "◉", "Active"],
-  ["needs-you", "◇", "Needs you"],
-];
+  ["board", "board", "Job board"],
+  ["active", "active", "Active"],
+  ["needs-you", "review", "Needs you"],
+] as const;
 function message(e: unknown) {
   return e instanceof Error ? e.message : "Connection unavailable";
 }
@@ -72,7 +103,7 @@ function Modal({
       }}
     >
       <button className="close" aria-label="Close" onClick={close}>
-        ×
+        <Icon name="close" />
       </button>
       {children}
     </dialog>
@@ -309,14 +340,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </a>
         <aside className="sidebar">
           <div className="brand">
-            <span className="mark">↗</span>
+            <span className="mark">
+              <Icon name="brand" />
+            </span>
             <strong>Conduit</strong>
             <button
               onClick={() => setCollapsed((v) => !v)}
               aria-label="Toggle sidebar"
               aria-expanded={!collapsed}
             >
-              ☰
+              <Icon name="sidebar" />
             </button>
           </div>
           <p className="eyebrow">WORKSPACE</p>
@@ -325,9 +358,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <Link
                 key={route}
                 href={`/app/${route}`}
+                aria-label={label}
                 aria-current={pathname === `/app/${route}` ? "page" : undefined}
               >
-                <span>{icon}</span>
+                <Icon name={icon} />
                 <span className="nav-label">{label}</span>
                 <b
                   aria-label={`${counts[i]} ${["queued", "running", "needs you"][i]}`}
@@ -340,7 +374,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <div className="pinned">
             <p className="eyebrow">PINNED</p>
             <span className="pill">
-              ● {key ? "Read-only connection" : "Disconnected"}
+              <Icon name="connection" />{" "}
+              {key ? "Read-only connection" : "Disconnected"}
             </span>
             <p>
               {workers.filter((w) => w.available && !stale(w, now)).length}{" "}
@@ -365,14 +400,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <footer>
-            ⌘ / Ctrl K · Jump
-            <br />⌘ / Ctrl B · Sidebar
+            Cmd / Ctrl K · Jump
+            <br />
+            Cmd / Ctrl B · Sidebar
           </footer>
         </aside>
         <main id="content" className="surface">
           {!key ? (
             <section className="connect">
-              <span className="mark">↗</span>
+              <span className="mark">
+                <Icon name="brand" />
+              </span>
               <p className="eyebrow">YOUR WORK, IN VIEW</p>
               <h1>Connect to Conduit</h1>
               {authRequest("password", {}) ? (
@@ -401,7 +439,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                       onChange={(e) => setPassword(e.target.value)}
                       required
                     />
-                    <button disabled={connecting}>Sign in</button>
+                    <button className="primary" disabled={connecting}>
+                      Sign in
+                    </button>
                     <button
                       disabled={connecting}
                       type="submit"
@@ -466,7 +506,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                     ? `Updated ${age(new Date(updated).toISOString(), now)}`
                     : "Loading…"}
                 </span>
-                <button onClick={() => setPalette(true)}>⌕ Command K</button>
+                <button onClick={() => setPalette(true)}>
+                  <Icon name="search" /> Command K
+                </button>
               </div>
               {(error || (updated && now - updated > 15000)) && (
                 <p className="banner" role="alert">
@@ -504,7 +546,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   setPalette(false);
                 }}
               >
-                {icon} {label} →
+                <Icon name={icon} /> {label} <Icon name="arrow" />
               </button>
             ))}
           </Modal>
@@ -526,7 +568,7 @@ function Github({ url }: { url: unknown }) {
   const safe = githubUrl(url);
   return safe ? (
     <a href={safe} target="_blank" rel="noreferrer noopener">
-      Open on GitHub ↗
+      Open on GitHub <Icon name="external" />
     </a>
   ) : null;
 }
@@ -663,7 +705,7 @@ export function Screen({ view }: { view: string }) {
       ) : view === "board" ? (
         <>
           <label className="search">
-            ⌕{" "}
+            <Icon name="search" />{" "}
             <input
               aria-label="Filter jobs by title id or status"
               placeholder="Filter by title, id, or status…"
@@ -691,7 +733,7 @@ export function Screen({ view }: { view: string }) {
                       .includes(c.search.toLowerCase()),
                 );
                 return (
-                  <section className="lane" key={name}>
+                  <section className="lane" data-status={name} key={name}>
                     <h2>
                       <span
                         className={`dot ${name === "Completed" ? "green" : name === "Failed / blocked" ? "red" : ""}`}
