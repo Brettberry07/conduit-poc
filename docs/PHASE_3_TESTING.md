@@ -59,7 +59,8 @@ CODEX_TIMEOUT_MS=180000
 Required: API origin, worker credential file, local Codex login, Node 24.
 `WORKER_STATE_DIR` defaults to `.worker/<worker-principal>`; use a dedicated
 state directory per API origin. `CODEX_TIMEOUT_MS` defaults to 180000 and accepts
-1000–600000. Each verification command has its own fixed 30-second timeout.
+1000–1800000 milliseconds. The worker validates it before claiming jobs. Each
+verification command has its own fixed 30-second timeout.
 `CONDUIT_CODEX_MODEL` is optional; otherwise Codex chooses its default model.
 
 ```sh

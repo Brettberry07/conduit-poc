@@ -27,12 +27,14 @@ test("Codex rejects arbitrary projects before workspace creation or login access
 test("timeout configuration and output redaction are bounded", () => {
   const old = process.env.CODEX_TIMEOUT_MS;
   try {
-    for (const v of ["0", "NaN", "999", "600001"]) {
+    for (const v of ["0", "NaN", "999", "1800001"]) {
       process.env.CODEX_TIMEOUT_MS = v;
       assert.throws(timeoutMs);
     }
     process.env.CODEX_TIMEOUT_MS = "1000";
     assert.equal(timeoutMs(), 1000);
+    process.env.CODEX_TIMEOUT_MS = "1800000";
+    assert.equal(timeoutMs(), 1800000);
     const secret = "cnd_live_" + "a".repeat(43);
     assert.ok(!redact(secret).includes(secret));
     assert.equal(redact("x".repeat(10000)).length, 2000);

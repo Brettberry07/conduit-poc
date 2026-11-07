@@ -3,7 +3,9 @@ import { resolve, join } from "node:path";
 import { log } from "./runner";
 import { maxAgents, supervise } from "./supervisor";
 import { apiOrigin, workerClient } from "./client";
+import { timeoutMs } from "./codex";
 const limit = maxAgents(process.env.CONDUIT_MAX_AGENTS);
+timeoutMs();
 const base = apiOrigin(
   process.env.CONDUIT_API_URL ??
     process.env.ORCHESTRATOR_URL ??

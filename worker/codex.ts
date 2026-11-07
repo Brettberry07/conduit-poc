@@ -24,8 +24,8 @@ export const redact = (s: string) =>
     .slice(0, 2000);
 export function timeoutMs() {
   const value = Number(process.env.CODEX_TIMEOUT_MS ?? 180000);
-  if (!Number.isInteger(value) || value < 1000 || value > 600000)
-    throw Error("CODEX_TIMEOUT_MS must be 1000..600000");
+  if (!Number.isInteger(value) || value < 1000 || value > 1800000)
+    throw Error("CODEX_TIMEOUT_MS must be 1000..1800000");
   return value;
 }
 export async function snapshot(dir: string): Promise<Record<string, string>> {

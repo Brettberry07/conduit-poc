@@ -143,6 +143,8 @@ export async function executeWorktree(
   phase: (value: "running" | "verifying") => Promise<void>,
   remember: (dir: string) => Promise<void>,
 ): Promise<Execution> {
+  const timeout = timeoutMs();
+  const instructions = developmentContext(job);
   if (process.platform !== "darwin")
     throw Error(
       "Phase 4 Codex execution requires the tested macOS Codex sandbox",
@@ -247,16 +249,14 @@ export async function executeWorktree(
     const timer = setTimeout(() => {
       failed = true;
       kill(child.pid);
-    }, timeoutMs());
+    }, timeout);
     const code = await new Promise<number | null>((done, reject) => {
       child.once("error", () =>
         reject(Error("Codex supervisor could not start")),
       );
       child.once("exit", done);
-      child.send({
-        workspace,
-        timeout: timeoutMs(),
-        instructions: developmentContext(job),
+      child.send({ workspace, timeout, instructions }, (error) => {
+        if (error) reject(Error("Codex supervisor could not receive the job"));
       });
     }).finally(() => {
       clearTimeout(timer);

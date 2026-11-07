@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { maxAgents } from "../worker/supervisor";
 import { supervise } from "../worker/supervisor";
@@ -149,4 +150,24 @@ test("worker agent limit rejects invalid values without clamping", () => {
       () => maxAgents(value),
       /CONDUIT_MAX_AGENTS must be an integer from 1 to 4/,
     );
+});
+
+test("worker startup rejects an invalid Codex timeout before loading credentials", () => {
+  const worker = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "worker/index.ts"],
+    {
+      env: {
+        ...process.env,
+        CODEX_TIMEOUT_MS: "1800001",
+        CONDUIT_MAX_AGENTS: "1",
+        WORKER_KEY_FILE: "",
+      },
+      encoding: "utf8",
+      timeout: 10000,
+    },
+  );
+  assert.ifError(worker.error);
+  assert.equal(worker.status, 1);
+  assert.match(worker.stderr, /CODEX_TIMEOUT_MS must be 1000\.\.1800000/);
 });
