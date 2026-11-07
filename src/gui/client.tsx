@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { authRequest, connectEmail, readApi, sessionClient } from "./auth";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -14,7 +14,6 @@ import {
   age,
   column,
   columns,
-  dependencyLabel,
   githubUrl,
   needsYou,
   stale,
@@ -23,7 +22,7 @@ import {
   type Detail,
   type ActivityEvent,
 } from "./model";
-type Data = {
+export type ConsoleData = {
   jobs: Job[];
   workers: Worker[];
   details: Record<string, Detail>;
@@ -34,8 +33,10 @@ type Data = {
   loading: boolean;
   updated: number;
   error: string;
+  paused: boolean;
 };
-const Context = createContext<Data>(null!);
+export const ConsoleContext = createContext<ConsoleData>(null!);
+const Context = ConsoleContext;
 const iconPaths = {
   brand: "M3 12V4h8M3 4l10 8M7 12h6V6",
   board: "M2 3h12v10H2zM6 3v10M10 3v10",
@@ -46,6 +47,11 @@ const iconPaths = {
   search: "M10.5 10.5L14 14M11 6.5a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0",
   external: "M9 2h5v5M14 2L7 9M6 3H2v11h11v-4",
   close: "M4 4l8 8M12 4l-8 8",
+  queued: "M8 3v5l3 2M14 8a6 6 0 1 1-12 0 6 6 0 0 1 12 0",
+  running: "M6 3l7 5-7 5z",
+  completed: "M3 8l3 3 7-7",
+  failed: "M8 2l6 3v5l-6 4-6-4V5zM6 6l4 4M10 6l-4 4",
+  blocked: "M3 3h10v10H3zM5 8h6",
   arrow: "M2 8h12M9 3l5 5-5 5",
 };
 function Icon({ name }: { name: keyof typeof iconPaths }) {
@@ -125,7 +131,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
       setJobs([]);
       setWorkers([]);
       setDetails({});
-      setSelected(null);
       setUpdated(0);
       setError("");
     });
@@ -166,12 +171,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
     [updated, setUpdated] = useState(0),
     [loading, setLoading] = useState(false),
     [now, setNow] = useState(Date.now()),
-    [search, setSearch] = useState(""),
-    [selected, setSelected] = useState<Job | null>(null),
+    [paused, setPaused] = useState(false),
     [collapsed, setCollapsed] = useState(false),
     [palette, setPalette] = useState(false);
   const pathname = usePathname(),
-    router = useRouter();
+    router = useRouter(),
+    params = useSearchParams();
+  const search = params.get("filter") ?? "";
+  const selected = jobs.find((j) => j.id === params.get("job")) ?? null;
+  function updateUrl(name: string, value: string) {
+    const url = new URL(window.location.href);
+    if (value) url.searchParams.set(name, value);
+    else url.searchParams.delete(name);
+    window.history.pushState(null, "", url);
+  }
+  const setSearch = (value: string) => updateUrl("filter", value);
+  const setSelected = (job: Job | null) => updateUrl("job", job?.id ?? "");
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -267,7 +282,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
             setJobs([]);
             setWorkers([]);
             setDetails({});
-            setSelected(null);
             setUpdated(0);
           }
         }
@@ -277,9 +291,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
       }
     }
     const visibility = () => {
+      setPaused(document.hidden);
       if (document.hidden) controller.abort();
       else void poll();
     };
+    setPaused(document.hidden);
     void poll();
     const t = setInterval(poll, 3000);
     document.addEventListener("visibilitychange", visibility);
@@ -309,13 +325,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
     setJobs([]);
     setWorkers([]);
     setDetails({});
-    setSelected(null);
     setUpdated(0);
     setError("");
   };
   const needs = needsYou(jobs, workers, details, now),
     counts = [
-      jobs.filter((j) => column(j.status) === "Queued").length,
+      jobs.length,
       jobs.filter((j) => j.status === "running").length,
       needs.length,
     ];
@@ -332,6 +347,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         loading,
         updated,
         error,
+        paused,
       }}
     >
       <div className={`console ${collapsed ? "collapsed" : ""}`}>
@@ -357,14 +373,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {routes.map(([route, icon, label], i) => (
               <Link
                 key={route}
-                href={`/app/${route}`}
+                href={`/app/${route}${params.size ? `?${params}` : ""}`}
                 aria-label={label}
                 aria-current={pathname === `/app/${route}` ? "page" : undefined}
               >
                 <Icon name={icon} />
                 <span className="nav-label">{label}</span>
                 <b
-                  aria-label={`${counts[i]} ${["queued", "running", "needs you"][i]}`}
+                  aria-label={`${counts[i]} ${["jobs", "running", "needs you"][i]}`}
                 >
                   {counts[i]}
                 </b>
@@ -400,9 +416,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <footer>
-            Cmd / Ctrl K · Jump
+            Cmd / Ctrl K / Jump
             <br />
-            Cmd / Ctrl B · Sidebar
+            Cmd / Ctrl B / Sidebar
           </footer>
         </aside>
         <main id="content" className="surface">
@@ -471,7 +487,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 for you.
               </p>
               <form onSubmit={connect}>
-                <label htmlFor="key">Read-only Instinct key · jobs:read</label>
+                <label htmlFor="key">Read-only Instinct key / jobs:read</label>
                 <input
                   id="key"
                   type="password"
@@ -482,7 +498,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   required
                 />
                 <button className="primary" disabled={connecting}>
-                  {connecting ? "Connecting…" : "Connect"}
+                  {connecting ? "Connecting..." : "Connect"}
                 </button>
               </form>
               <p>
@@ -501,20 +517,39 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <span>
                   Workspace / {routes.find((r) => pathname.endsWith(r[0]))?.[2]}
                 </span>
-                <span role="status">
+                <span>
                   {updated
                     ? `Updated ${age(new Date(updated).toISOString(), now)}`
-                    : "Loading…"}
+                    : "Loading..."}
                 </span>
                 <button onClick={() => setPalette(true)}>
                   <Icon name="search" /> Command K
                 </button>
               </div>
-              {(error || (updated && now - updated > 15000)) && (
-                <p className="banner" role="alert">
-                  {error ||
-                    "Updates are stale. Polling pauses while this tab is hidden."}{" "}
-                  Last successful data is retained.
+              <p
+                className="sr-only"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                {error
+                  ? "Workspace refresh failed."
+                  : updated
+                    ? `${jobs.length} jobs loaded. ${counts[1]} running. ${needs.length} items need attention.`
+                    : "Loading workspace."}
+              </p>
+              {(error || paused) && (
+                <p className="banner" role="status">
+                  {paused
+                    ? "Reads paused while this tab is hidden. Updates resume when you return."
+                    : `Refresh failed: ${error} Reads retry every 3 seconds while visible.`}
+                  {updated ? " Last successful data is retained." : ""}
+                </p>
+              )}
+              {updated > 0 && params.get("job") && !selected && (
+                <p className="banner" role="status">
+                  The linked job is not in the latest 100 loaded jobs.{" "}
+                  <button onClick={() => setSelected(null)}>Dismiss</button>
                 </p>
               )}
               {children}
@@ -532,7 +567,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  router.push("/app/board");
+                  router.push(
+                    `/app/board?${new URLSearchParams(window.location.search)}`,
+                  );
                   setPalette(false);
                 }
               }}
@@ -542,7 +579,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 className="command"
                 key={route}
                 onClick={() => {
-                  router.push(`/app/${route}`);
+                  router.push(
+                    `/app/${route}?${new URLSearchParams(window.location.search)}`,
+                  );
                   setPalette(false);
                 }}
               >
@@ -583,44 +622,60 @@ function Json({ value }: { value: unknown }) {
     </pre>
   );
 }
+function StatusBadge({ status }: { status: string }) {
+  const known = [
+    "queued",
+    "running",
+    "review",
+    "completed",
+    "failed",
+    "blocked",
+  ] as const;
+  const kind =
+    known.find((v) => v === status) ??
+    (status === "waiting_dependencies" ? "blocked" : "queued");
+  const label =
+    status === "review"
+      ? "Awaiting review"
+      : status === "waiting_dependencies"
+        ? "Waiting on dependencies"
+        : status.replaceAll("_", " ");
+  return (
+    <span className={`status-badge status-${kind}`}>
+      <Icon name={kind === "review" ? "review" : kind} />
+      {label}
+    </span>
+  );
+}
 function JobCard({ job }: { job: Job }) {
   const c = useContext(Context);
+  const pr = c.details[job.id]?.publication?.pull_request;
+  const review =
+    job.status === "completed" &&
+    pr?.state === "open" &&
+    pr.draft &&
+    !pr.merged;
   return (
-    <article className={`job ${job.status}`}>
+    <article className="job">
       <button className="job-open" onClick={() => c.select(job)}>
-        <span className="job-id">
-          {job.id.slice(0, 8)} · {job.status}
-        </span>
         <h3>{job.title}</h3>
-        <p className="mono">
-          {job.project ?? job.project_id ?? "No project"} /{" "}
-          {job.base_branch ?? "No branch"}
-        </p>
-        <span>
-          {job.phase ?? "Phase not reported"} · {job.progress}%
+        <StatusBadge status={review ? "review" : job.status} />
+        <span className="job-meta">
+          <code>{job.id.slice(0, 8)}</code>
+          <time dateTime={job.created_at}>{age(job.created_at, c.now)}</time>
         </span>
-        <progress max={100} value={job.progress} aria-label="Job progress" />
-        <small>
-          Attempt {job.attempt_count} · {job.worker_id ?? "Unassigned"}
-        </small>
-        {job.status === "waiting_dependencies" && (
-          <span className="waiting">{dependencyLabel(job)}</span>
+        {job.status === "running" && (
+          <div className="job-progress">
+            <span>{job.phase ?? "In progress"}</span>
+            <span>{job.progress}%</span>
+            <progress
+              max={100}
+              value={job.progress}
+              aria-label="Job progress"
+            />
+          </div>
         )}
-        {job.error && <p className="failure">{job.error}</p>}
-        <small>
-          {job.root_job_id && job.root_job_id !== job.id
-            ? `Revision of ${job.root_job_id}`
-            : "Root job"}
-        </small>
-        <small>
-          Created {age(job.created_at, c.now)}
-          <br />
-          Claimed {age(job.claimed_at, c.now)}
-          <br />
-          Completed {age(job.completed_at, c.now)}
-        </small>
       </button>
-      <Github url={c.details[job.id]?.publication?.pull_request?.url} />
     </article>
   );
 }
@@ -635,8 +690,8 @@ function Checks({ result }: { result?: Record<string, unknown> | null }) {
         >;
         return (
           <li key={i}>
-            {String(x.name ?? x.command ?? "Check")} · exit{" "}
-            {String(x.exit_code ?? "not reported")} · timed out:{" "}
+            {String(x.name ?? x.command ?? "Check")} / exit{" "}
+            {String(x.exit_code ?? "not reported")} / timed out:{" "}
             {String(x.timed_out ?? "not reported")}
           </li>
         );
@@ -649,11 +704,11 @@ function Timeline({ job, detail }: { job: Job; detail?: Detail }) {
     <div className="timeline">
       <h4>Execution details</h4>
       <ol>
-        {job.claimed_at && <li>Claimed · {age(job.claimed_at)}</li>}
+        {job.claimed_at && <li>Claimed / {age(job.claimed_at)}</li>}
         <li>Current phase: {job.phase ?? "not reported"}</li>
         {detail?.executions?.map((e) => (
           <li key={e.attempt}>
-            Attempt {e.attempt} · {e.status} · {age(e.started_at)}
+            Attempt {e.attempt} / {e.status} / {age(e.started_at)}
             {e.error && <p>{e.error}</p>}
             <Checks result={e.result} />
           </li>
@@ -672,19 +727,37 @@ function Timeline({ job, detail }: { job: Job; detail?: Detail }) {
     </div>
   );
 }
+function useDelayedLoading(loading: boolean) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setVisible(loading), loading ? 200 : 300);
+    return () => clearTimeout(timer);
+  }, [loading]);
+  return visible;
+}
+function EmptyState({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="empty-state">
+      <Icon name="board" />
+      <h2>{title}</h2>
+      <p>{text}</p>
+    </div>
+  );
+}
 export function Screen({ view }: { view: string }) {
   const c = useContext(Context),
     needs = needsYou(c.jobs, c.workers, c.details, c.now);
+  const showSkeleton = useDelayedLoading(c.loading && !c.updated && !c.paused);
   return (
     <section className="screen">
       <header>
         <p className="eyebrow">CONDUIT / READ ONLY</p>
         <h1>
           {view === "board"
-            ? "A place for every job."
+            ? "Job board"
             : view === "active"
-              ? "Work in motion."
-              : "Your attention, here."}
+              ? "Active workers"
+              : "Needs you"}
         </h1>
         <p className="muted">
           {view === "board"
@@ -694,21 +767,39 @@ export function Screen({ view }: { view: string }) {
               : "Decisions and recovery signals from reported data. No actions run here."}
         </p>
       </header>
-      {c.loading && !c.updated ? (
-        <div className="skeleton" role="status">
-          Loading workspace…
+      {!c.updated || (showSkeleton && !c.error && !c.paused) ? (
+        <div className="initial-state" aria-busy={c.loading && !c.paused}>
+          {c.paused ? (
+            <EmptyState
+              title="Updates paused"
+              text="Reads resume when this tab is visible."
+            />
+          ) : c.error ? (
+            <EmptyState
+              title="Workspace could not be loaded"
+              text="The read request failed. Retrying every 3 seconds while visible."
+            />
+          ) : showSkeleton ? (
+            <div className="skeleton-grid" aria-label="Loading workspace">
+              {[0, 1, 2].map((i) => (
+                <div className="skeleton-card" key={i}>
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className="sr-only">Loading workspace</span>
+          )}
         </div>
-      ) : !c.updated ? (
-        <p className="empty">
-          Workspace unavailable. Reads retry every 3 seconds while visible.
-        </p>
       ) : view === "board" ? (
         <>
           <label className="search">
             <Icon name="search" />{" "}
             <input
               aria-label="Filter jobs by title id or status"
-              placeholder="Filter by title, id, or status…"
+              placeholder="Filter by title, id, or status..."
               value={c.search}
               onChange={(e) => c.setSearch(e.target.value)}
             />
@@ -735,16 +826,19 @@ export function Screen({ view }: { view: string }) {
                 return (
                   <section className="lane" data-status={name} key={name}>
                     <h2>
-                      <span
-                        className={`dot ${name === "Completed" ? "green" : name === "Failed / blocked" ? "red" : ""}`}
-                      />
                       {name}
                       <span className="count">{list.length}</span>
                     </h2>
                     {list.map((j) => (
                       <JobCard key={j.id} job={j} />
                     ))}
-                    {!list.length && <p className="empty">No jobs here</p>}
+                    {!list.length && (
+                      <p className="empty">
+                        {c.search
+                          ? "No matching jobs"
+                          : "No jobs in this stage"}
+                      </p>
+                    )}
                   </section>
                 );
               })}
@@ -753,9 +847,10 @@ export function Screen({ view }: { view: string }) {
       ) : view === "active" ? (
         <div className="workers">
           {!c.workers.length && (
-            <p className="empty">
-              No workers reported. Queued jobs need an available worker.
-            </p>
+            <EmptyState
+              title="No workers reported"
+              text="Connected workers will appear here. Queued jobs need an available worker."
+            />
           )}
           {c.workers.map((w) => {
             const list = c.jobs.filter(
@@ -765,13 +860,16 @@ export function Screen({ view }: { view: string }) {
             return (
               <section className="worker" key={w.worker_id}>
                 <h2 className="mono">{w.worker_id}</h2>
-                <p className={offline ? "failure" : "healthy"}>
-                  {offline ? "Offline / stale" : "Available"} ·{" "}
+                <p
+                  className={`worker-state ${offline ? "failure" : "healthy"}`}
+                >
+                  <Icon name={offline ? "blocked" : "completed"} />
+                  {offline ? "Offline / stale" : "Available"} /{" "}
                   {w.busy ? "Busy" : "Idle"}
                 </p>
                 <p>
                   Last seen {age(w.last_seen_at, c.now)}
-                  {stale(w, c.now) && " · exceeds 15s freshness window"}
+                  {stale(w, c.now) && " / exceeds 15s freshness window"}
                 </p>
                 {list.length ? (
                   list.map((j) => (
@@ -809,22 +907,36 @@ export function Screen({ view }: { view: string }) {
       ) : (
         <div className="needs">
           {!needs.length && (
-            <p className="empty">
-              Nothing needs you in the loaded data.
-              {c.error
-                ? " Some data is unavailable; see the banner above."
-                : " You’re all caught up."}
-            </p>
+            <EmptyState
+              title={
+                c.error
+                  ? "No attention items in retained data"
+                  : "You are all caught up"
+              }
+              text={
+                c.error
+                  ? "Some reads failed. Review signals may be incomplete."
+                  : "No decisions or recovery signals in the latest loaded jobs."
+              }
+            />
           )}
           {needs.map((n) => (
             <article key={n.id} className={`need severity-${n.severity}`}>
-              <span className="pill">
-                {["High", "Attention", "Review"][n.severity]}
-              </span>
+              <StatusBadge
+                status={
+                  n.severity === 0
+                    ? "failed"
+                    : n.severity === 2
+                      ? "review"
+                      : "blocked"
+                }
+              />
               <h2>{n.why}</h2>
               {n.job && (
                 <p>
-                  {n.job.title} · <code>{n.job.id}</code>
+                  <button className="need-job" onClick={() => c.select(n.job!)}>
+                    {n.job.title} <code>{n.job.id.slice(0, 8)}</code>
+                  </button>
                 </p>
               )}
               <p className="muted">{age(n.date, c.now)}</p>
@@ -856,7 +968,7 @@ function JobActivity({
     <section className="timeline" aria-label="Recorded activity">
       <h2>Recorded activity</h2>
       {error && <p role="status">{error}</p>}
-      {!events && !error && <p role="status">Loading activity…</p>}
+      {!events && !error && <p role="status">Loading activity...</p>}
       {events?.length === 0 && (
         <p>No activity has been recorded for this job.</p>
       )}
@@ -867,18 +979,18 @@ function JobActivity({
             {[...events].reverse().map((event) => (
               <li key={event.id}>
                 <strong>{event.type.replace(/[._]/g, " ")}</strong>
-                {event.data.phase && <> · {event.data.phase}</>}
+                {event.data.phase && <> / {event.data.phase}</>}
                 {(event.data.attempt ?? 0) > 0 && (
-                  <> · attempt {event.data.attempt}</>
+                  <> / attempt {event.data.attempt}</>
                 )}
-                {" · "}
+                {" / "}
                 <time dateTime={event.occurred_at}>
                   {new Date(event.occurred_at).toLocaleString()}
                 </time>
                 {pr && event.data.number === pr.number && (
                   <>
                     {" "}
-                    · <Github url={pr.url} />
+                    / <Github url={pr.url} />
                   </>
                 )}
               </li>
@@ -959,7 +1071,7 @@ function JobDetail({
   }, [job.id, apiKey]);
   return (
     <Modal label={`Job details: ${job.title}`} close={close} sheet>
-      <p className="eyebrow">JOB DETAIL · {job.status}</p>
+      <p className="eyebrow">JOB DETAIL / {job.status}</p>
       <h1>{job.title}</h1>
       <code>{job.id}</code>
       <JobActivity
@@ -976,7 +1088,7 @@ function JobDetail({
       <h2>Error</h2>
       <Json value={job.error} />
       {!detail ? (
-        <p className="skeleton">Loading job details…</p>
+        <p className="skeleton">Loading job details...</p>
       ) : (
         <>
           <Timeline job={job} detail={detail} />

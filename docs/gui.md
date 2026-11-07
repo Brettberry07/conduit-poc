@@ -31,3 +31,28 @@ Visual review still needs fresh desktop (1440 × 1000) and mobile (390 × 844) s
 Offline verification retry: TypeScript checking and all 54 tests across the 11 service-independent test files pass. `tests/events.test.ts` and `tests/initiatives.test.ts` require embedded PostgreSQL and allocate a loopback port with `server.listen(0, "127.0.0.1")`. This sandbox denies even loopback sockets: a standalone Node socket probe returns `EPERM`. Rerunning those files also aborts with a Node `InternalCallbackScope::Close` assertion. They remain unmodified and must be verified in an environment that permits their database service; this is not a fully passing configured test run.
 
 Security headers apply only to `/app` routes. A strict script CSP is deferred: Next's inline bootstrap scripts require a coordinated nonce strategy; a static policy would break hydration. No inline eval policy is added. Existing API-key authentication behavior is unchanged.
+
+## Board and monitoring rebuild
+
+The three monitoring screens now use title-first cards, SVG-and-color status badges, short IDs and relative timestamps. Running cards show a subdued progress bar; detailed evidence remains in the job sheet. A completed job with an open draft PR is marked Awaiting review. Failed and blocked badges remain distinct. Navigation badges count all loaded jobs, running jobs and attention items respectively. Lane counts reflect the current search. Below 1000px the board becomes one vertically grouped list; the existing mobile bottom navigation remains.
+
+The `filter` and `job` query parameters hold search and selection. Browser history records changes; closing the sheet clears only `job`. Navigation preserves these parameters. Links to jobs outside the latest 100 loaded jobs show an explicit notice. Credentials remain in memory and never enter the URL. Connection validation and API reads are unchanged.
+
+Initial skeletons wait 200ms and remain for at least 300ms once shown. Background refreshes retain the existing content. Hidden tabs show paused copy; real fetch failures show retry copy. Successful empty responses have screen-specific empty states. A polite live region announces changed job/attention counts without announcing the ticking relative timestamp.
+
+### Screenshot acceptance still pending
+
+No new screenshots were captured in this offline worker: no browser capture tool is available and loopback sockets are prohibited. Existing PNGs predate this rebuild. They must not be used as evidence for this change. Publication is managed externally; no PR was created here.
+
+Capture `/app/board`, `/app/active`, and `/app/needs-you` at **1440 x 1000** and **390 x 844**, for each of the following states (24 captures total):
+
+| State     | Read responses / setup                                                                                                                    | Verify                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Populated | Use the realistic job titles and worker/publication evidence in `tests/gui-screens.test.ts`; include a completed job without a PR as well | All six badges, running progress, counts, worker freshness, draft review and failure evidence |
+| Empty     | Successful `{ jobs: [] }` and `{ workers: [] }`                                                                                           | Honest empty copy; no failure banner                                                          |
+| Loading   | Delay the initial GET responses at least 1 second                                                                                         | Skeleton appears after 200ms, no unavailable copy                                             |
+| Error     | Fail initial jobs/workers GET                                                                                                             | Fetch failure and automatic retry copy; no caught-up claim                                    |
+
+Also verify hidden-tab pause/resume, retained content on background failure, 320px and wide-screen layouts, reduced motion, keyboard focus, and mobile bottom navigation. Open a job, change the filter, reload, share the URL, and use Back/Forward to verify selection and filtering. Connect with a viewer key and confirm all requests remain same-origin GETs, no credential appears in the URL, and disconnect clears loaded data. No mutation controls were added.
+
+Local rebuild verification: `node node_modules/typescript/bin/tsc --noEmit`, `node scripts/test-offline.cjs` (59 tests in 12 files), and `node node_modules/next/dist/bin/next build` pass. The service-dependent full integration suite requires a separate environment permitting local database sockets.
