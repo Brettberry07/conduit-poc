@@ -416,9 +416,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <footer>
-            Cmd / Ctrl K / Jump
+            Cmd / Ctrl K · Jump
             <br />
-            Cmd / Ctrl B / Sidebar
+            Cmd / Ctrl B · Sidebar
           </footer>
         </aside>
         <main id="content" className="surface">
@@ -487,7 +487,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 for you.
               </p>
               <form onSubmit={connect}>
-                <label htmlFor="key">Read-only Instinct key / jobs:read</label>
+                <label htmlFor="key">Read-only Instinct key · jobs:read</label>
                 <input
                   id="key"
                   type="password"
@@ -498,7 +498,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   required
                 />
                 <button className="primary" disabled={connecting}>
-                  {connecting ? "Connecting..." : "Connect"}
+                  {connecting ? "Connecting…" : "Connect"}
                 </button>
               </form>
               <p>
@@ -515,12 +515,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <>
               <div className="topline">
                 <span>
-                  Workspace / {routes.find((r) => pathname.endsWith(r[0]))?.[2]}
+                  Workspace · {routes.find((r) => pathname.endsWith(r[0]))?.[2]}
                 </span>
                 <span>
                   {updated
                     ? `Updated ${age(new Date(updated).toISOString(), now)}`
-                    : "Loading..."}
+                    : "Loading…"}
                 </span>
                 <button onClick={() => setPalette(true)}>
                   <Icon name="search" /> Command K
@@ -690,8 +690,8 @@ function Checks({ result }: { result?: Record<string, unknown> | null }) {
         >;
         return (
           <li key={i}>
-            {String(x.name ?? x.command ?? "Check")} / exit{" "}
-            {String(x.exit_code ?? "not reported")} / timed out:{" "}
+            {String(x.name ?? x.command ?? "Check")} · exit{" "}
+            {String(x.exit_code ?? "not reported")} · timed out:{" "}
             {String(x.timed_out ?? "not reported")}
           </li>
         );
@@ -704,11 +704,11 @@ function Timeline({ job, detail }: { job: Job; detail?: Detail }) {
     <div className="timeline">
       <h4>Execution details</h4>
       <ol>
-        {job.claimed_at && <li>Claimed / {age(job.claimed_at)}</li>}
+        {job.claimed_at && <li>Claimed · {age(job.claimed_at)}</li>}
         <li>Current phase: {job.phase ?? "not reported"}</li>
         {detail?.executions?.map((e) => (
           <li key={e.attempt}>
-            Attempt {e.attempt} / {e.status} / {age(e.started_at)}
+            Attempt {e.attempt} · {e.status} · {age(e.started_at)}
             {e.error && <p>{e.error}</p>}
             <Checks result={e.result} />
           </li>
@@ -751,7 +751,7 @@ export function Screen({ view }: { view: string }) {
   return (
     <section className="screen">
       <header>
-        <p className="eyebrow">CONDUIT / READ ONLY</p>
+        <p className="eyebrow">CONDUIT · READ ONLY</p>
         <h1>
           {view === "board"
             ? "Job board"
@@ -799,7 +799,7 @@ export function Screen({ view }: { view: string }) {
             <Icon name="search" />{" "}
             <input
               aria-label="Filter jobs by title id or status"
-              placeholder="Filter by title, id, or status..."
+              placeholder="Filter by title, id, or status…"
               value={c.search}
               onChange={(e) => c.setSearch(e.target.value)}
             />
@@ -864,12 +864,12 @@ export function Screen({ view }: { view: string }) {
                   className={`worker-state ${offline ? "failure" : "healthy"}`}
                 >
                   <Icon name={offline ? "blocked" : "completed"} />
-                  {offline ? "Offline / stale" : "Available"} /{" "}
+                  {offline ? "Offline · stale" : "Available"} ·{" "}
                   {w.busy ? "Busy" : "Idle"}
                 </p>
                 <p>
                   Last seen {age(w.last_seen_at, c.now)}
-                  {stale(w, c.now) && " / exceeds 15s freshness window"}
+                  {stale(w, c.now) && " · exceeds 15s freshness window"}
                 </p>
                 {list.length ? (
                   list.map((j) => (
@@ -925,7 +925,7 @@ export function Screen({ view }: { view: string }) {
               <StatusBadge
                 status={
                   n.severity === 0
-                    ? "failed"
+                    ? n.job!.status
                     : n.severity === 2
                       ? "review"
                       : "blocked"
@@ -968,7 +968,7 @@ function JobActivity({
     <section className="timeline" aria-label="Recorded activity">
       <h2>Recorded activity</h2>
       {error && <p role="status">{error}</p>}
-      {!events && !error && <p role="status">Loading activity...</p>}
+      {!events && !error && <p role="status">Loading activity…</p>}
       {events?.length === 0 && (
         <p>No activity has been recorded for this job.</p>
       )}
@@ -979,18 +979,18 @@ function JobActivity({
             {[...events].reverse().map((event) => (
               <li key={event.id}>
                 <strong>{event.type.replace(/[._]/g, " ")}</strong>
-                {event.data.phase && <> / {event.data.phase}</>}
+                {event.data.phase && <> · {event.data.phase}</>}
                 {(event.data.attempt ?? 0) > 0 && (
-                  <> / attempt {event.data.attempt}</>
+                  <> · attempt {event.data.attempt}</>
                 )}
-                {" / "}
+                {" · "}
                 <time dateTime={event.occurred_at}>
                   {new Date(event.occurred_at).toLocaleString()}
                 </time>
                 {pr && event.data.number === pr.number && (
                   <>
                     {" "}
-                    / <Github url={pr.url} />
+                    · <Github url={pr.url} />
                   </>
                 )}
               </li>
@@ -1071,7 +1071,7 @@ function JobDetail({
   }, [job.id, apiKey]);
   return (
     <Modal label={`Job details: ${job.title}`} close={close} sheet>
-      <p className="eyebrow">JOB DETAIL / {job.status}</p>
+      <p className="eyebrow">JOB DETAIL · {job.status}</p>
       <h1>{job.title}</h1>
       <code>{job.id}</code>
       <JobActivity
@@ -1088,7 +1088,7 @@ function JobDetail({
       <h2>Error</h2>
       <Json value={job.error} />
       {!detail ? (
-        <p className="skeleton">Loading job details...</p>
+        <p className="skeleton">Loading job details…</p>
       ) : (
         <>
           <Timeline job={job} detail={detail} />

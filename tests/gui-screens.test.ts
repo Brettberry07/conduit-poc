@@ -106,3 +106,29 @@ test("monitoring retains real worker and review evidence", () => {
     /Review signals may be incomplete/,
   );
 });
+
+for (const status of ["blocked", "failed"]) {
+  test(`needs-you renders the ${status} job badge`, () => {
+    const job = data.jobs.find((job) => job.status === status)!;
+    const html = render("needs-you", { jobs: [job], workers: [], details: {} });
+    const label = status;
+    assert.match(html, new RegExp(`status-${status}[^>]*><svg`));
+    assert.match(html, new RegExp(`</svg>${label}</span>`));
+    if (status === "blocked") {
+      assert.doesNotMatch(html, /status-failed|>failed<\/span>/i);
+    }
+  });
+}
+
+test("progress is shown only for running jobs", () => {
+  assert.match(
+    render("board"),
+    /<progress[^>]*value="42"[^>]*aria-label="Job progress"/,
+  );
+  assert.doesNotMatch(
+    render("board", {
+      jobs: data.jobs.filter((job) => job.status !== "running"),
+    }),
+    /<progress/,
+  );
+});

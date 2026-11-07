@@ -380,8 +380,21 @@
   width: 100%;
   height: var(--space-1);
   margin: var(--space-2) 0;
-  accent-color: var(--running);
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--subtle);
+  border-radius: var(--space-1);
+  overflow: hidden;
   border: 0;
+}
+.console progress::-webkit-progress-bar {
+  background: var(--subtle);
+}
+.console progress::-webkit-progress-value {
+  background: var(--running);
+}
+.console progress::-moz-progress-bar {
+  background: var(--running);
 }
 .console .job > a {
   display: block;
