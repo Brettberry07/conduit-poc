@@ -17,7 +17,12 @@ import {
   type LocalProject,
 } from "./git";
 import { captureChanges, commitChanges, type Changes } from "./changes";
-import { executeWorktree, type Execution } from "./executor";
+import {
+  executeWorktree,
+  failedCheck,
+  type Check,
+  type Execution,
+} from "./executor";
 export type Publication = {
   job_id: string;
   project_id: string;
@@ -168,6 +173,7 @@ export async function executeDevelopment(
     const workspace = worktreePath(root, p, job.root_job_id),
       statePath = join(executionDir, job.id + ".json");
     let state: State | undefined;
+    let repairChecks: Check[] | undefined;
     try {
       state = JSON.parse(await readFile(statePath, "utf8"));
     } catch (e) {
@@ -257,12 +263,16 @@ export async function executeDevelopment(
         publication.branch,
         state.head ?? state.start,
       );
-      if (state.stage === "executing") {
-        if (
-          !job.explicit_retry ||
-          !job.attempt_count ||
-          state.execution_attempt === job.attempt_count
-        ) {
+      const freshRetry =
+        job.explicit_retry &&
+        job.attempt_count &&
+        state.execution_attempt !== job.attempt_count;
+      const failedChecks = state.execution?.checks.filter(failedCheck);
+      if (
+        state.stage === "executing" ||
+        (state.stage === "executed" && freshRetry && failedChecks?.length)
+      ) {
+        if (!freshRetry) {
           throw new Blocked(
             "Interrupted Codex execution; inspect the preserved worktree before requesting retry",
           );
@@ -275,14 +285,27 @@ export async function executeDevelopment(
         );
         if (remote !== state.expected_remote)
           throw new Blocked(
-            "Remote branch changed since the interrupted execution",
+            "Remote branch changed since the previous execution",
           );
+        if (state.stage === "executed") repairChecks = failedChecks;
         state.stage = "prepared";
       }
     }
     if (state.stage === "prepared") {
       await assertHead(workspace, publication.branch, state.start);
-      if (
+      if (repairChecks) {
+        if ((await git(workspace, ["ls-files", "-u"])).trim())
+          throw new Blocked("Preserved worktree has unresolved conflicts");
+        const preserved = await captureChanges(
+          workspace,
+          state.start,
+          config.policy,
+        );
+        if (state.changes && state.changes.tree !== preserved.tree)
+          throw new Blocked(
+            "Worktree changed since failed verification; administrator recovery required",
+          );
+      } else if (
         (
           await git(workspace, [
             "status",
@@ -321,6 +344,7 @@ export async function executeDevelopment(
         stopping,
         (v) => phase(v),
         remember,
+        repairChecks,
       );
       state.stage = "executed";
       await save();
@@ -333,7 +357,7 @@ export async function executeDevelopment(
       };
       const passed =
         !!state.execution?.checks.length &&
-        state.execution.checks.every((c) => c.exit_code === 0 && !c.timed_out);
+        !state.execution.checks.some(failedCheck);
       result.verification = {
         status: passed ? "passed" : "failed",
         checks: state.execution?.checks ?? [],
@@ -343,6 +367,7 @@ export async function executeDevelopment(
         state.start,
         config.policy,
       );
+      if (!passed) await save();
       await workerCall(`/api/jobs/${job.id}/artifacts`, {
         claim_token: job.claim_token,
         kind: "execution",

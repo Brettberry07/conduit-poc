@@ -110,6 +110,8 @@ export const protocol = {
     scope: "jobs:revise",
     body: { expected_attempt_count: "attempt_count from GET /api/jobs/{id}" },
     response: "200 with the same job ID and its current status",
+    verification_failure:
+      "For a code or test failure the worker can fix, retry the same job. The worker supplies the failed checks to Codex and reruns verification from the preserved worktree. Report sandbox or dependency problems for operator action.",
     conflict:
       "409 if retry is ineligible. Check the error and inspect the job before proceeding.",
   },
@@ -301,7 +303,7 @@ export const protocol = {
     ],
     failures_and_decisions: [
       "Report job ID, phase, error, actual checks, changed files and draft PR when available. Explain blocked dependencies, missing research, verification gaps and recovery-required outcomes. Do not bypass locks, recovery rules or failures by creating duplicates.",
-      "After resolving a retryable failure, POST /api/jobs/{id}/retry with {expected_attempt_count} from the failed or blocked job. Replay the same body after a lost response and poll the same job ID. Leave dependent jobs blocked until all prerequisite PRs are merged. A worker may still block recovery if preserved changes need operator review.",
+      "Read failed verification checks before retrying. For a code or test failure Codex can repair, or after an operator resolves a worker setup problem, POST /api/jobs/{id}/retry with {expected_attempt_count} from the failed or blocked job. Replay the same body after a lost response and poll the same job ID. Leave dependent jobs blocked until all prerequisite PRs are merged. A worker may still block recovery if preserved changes need operator review.",
       "Escalate consequential ambiguity, conflicting requirements, security/credential needs, unavailable dependencies, exhausted revision budget, merge and deployment decisions to the user. Report concise outcomes with assumptions, evidence and remaining human decisions.",
     ],
     source_trust: [

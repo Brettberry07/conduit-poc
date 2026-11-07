@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   mkdtemp,
   mkdir,
@@ -234,6 +235,53 @@ test(
     }
   },
 );
+
+test("inline offline verification excludes integration suites and reports test failures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "conduit-offline-tests-"));
+  try {
+    const tests = join(directory, "tests");
+    await mkdir(tests);
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(directory, "node_modules"),
+    );
+    const shouldSkip =
+      'throw new Error("integration suite should have been skipped");';
+    for (const name of [
+      "events.test.ts",
+      "initiatives.test.ts",
+      "new.integration.test.ts",
+    ])
+      await writeFile(join(tests, name), shouldSkip);
+    await writeFile(
+      join(tests, "assertion.test.cjs"),
+      'require("node:test")("assertion", () => require("node:assert/strict").equal(1, 2, "intentional assertion diagnostic"));',
+    );
+    await writeFile(
+      join(tests, "crash.test.cjs"),
+      'require("node:fs").writeSync(2, "intentional crash diagnostic\\n"); process.kill(process.pid, "SIGTERM");',
+    );
+    const source = await readFile(
+      new URL("../scripts/test-offline.cjs", import.meta.url),
+      "utf8",
+    );
+    const result = spawnSync(process.execPath, ["-e", source], {
+      cwd: directory,
+      env: { NODE_ENV: "test" },
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, output);
+    assert.match(output, /Offline tests: 2 files/);
+    assert.match(output, /intentional assertion diagnostic/);
+    assert.match(output, /intentional crash diagnostic/);
+    assert.match(output, /SIGTERM/);
+    assert.doesNotMatch(output, /integration suite should have been skipped/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("worktrees preserve dirty checkout, detect actual changes including renames, commit and push independently", async () => {
   const f = await fixture();

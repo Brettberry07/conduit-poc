@@ -8,6 +8,7 @@
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "test:offline": "node scripts/test-offline.cjs",
     "worker": "tsx worker/index.ts",
     "key": "tsx scripts/key.ts",
     "db:local": "tsx scripts/local-db.ts",

@@ -33,10 +33,6 @@ export async function retryJob(
     if (job.attempt_count >= MAX_ATTEMPTS)
       throw new DevelopmentError("Job has reached its attempt limit");
     if (job.task === "development") {
-      if (job.result?.verification?.status === "failed")
-        throw new DevelopmentError(
-          "Verification failed; review the preserved changes and checks before recovery",
-        );
       const {
         rows: [conditions],
       } = await connection.query(

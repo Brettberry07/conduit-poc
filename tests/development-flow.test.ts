@@ -532,7 +532,7 @@ policyTest(
         },
       );
       await t.test(
-        "failed verification retains changes and publishes nothing",
+        "failed verification preserves changes and diagnostics for an explicit repair",
         async () => {
           // Independent publication uses a fresh fake GitHub instance because it models one PR branch.
           const independentFake = fakeGitHub(f, security),
@@ -554,11 +554,6 @@ policyTest(
             reported.job.result.verification.checks[0].output,
             "Example assertion failed",
           );
-          const retry = await req(`/api/jobs/${j.id}/retry`, "POST", {
-            expected_attempt_count: 1,
-          });
-          assert.equal(retry.status, 409);
-          assert.match((await retry.json()).error, /Verification failed/);
           assert.equal(independentFake.creates, 0);
           assert.equal(
             await remoteHead(
@@ -570,19 +565,69 @@ policyTest(
             ),
             null,
           );
-          assert.ok(
-            await readFile(
-              join(
-                f.config.storage_root,
-                "worktrees",
-                f.project.id,
-                j.id,
-                "new.txt",
-              ),
-            ),
+          const preserved = join(
+            f.config.storage_root,
+            "worktrees",
+            f.project.id,
+            j.id,
+            "new.txt",
           );
+          const firstContents = await readFile(preserved, "utf8");
+          const checkpoint = join(
+            f.config.storage_root,
+            "executions",
+            f.project.id,
+            j.id + ".json",
+          );
+          const saved = JSON.parse(await readFile(checkpoint, "utf8"));
+          assert.ok(saved.changes?.tree);
+          if (policy === "prototype") {
+            // Earlier workers persisted failed check results without the tree.
+            delete saved.changes;
+            await writeFile(checkpoint, JSON.stringify(saved));
+          }
+          const before = executions;
+          const retry = await req(`/api/jobs/${j.id}/retry`, "POST", {
+            expected_attempt_count: 1,
+          });
+          assert.equal(retry.status, 200, await retry.clone().text());
+          const { job: reclaimed } = await call("/api/claim", {});
+          assert.equal(reclaimed.id, j.id);
+          assert.equal(reclaimed.attempt_count, 2);
           failVerification = false;
-          deps.github = old;
+          const execute = deps.execute;
+          deps.execute = async (...args) => {
+            assert.equal(await readFile(preserved, "utf8"), firstContents);
+            assert.deepEqual(
+              args.at(-1),
+              reported.job.result.verification.checks,
+            );
+            return execute(...args);
+          };
+          try {
+            const repaired = await run(reclaimed);
+            assert.equal(
+              repaired.action,
+              "completed",
+              JSON.stringify(repaired),
+            );
+            assert.equal(executions, before + 1);
+            assert.equal(independentFake.creates, 1);
+            const history = await (
+              await req(`/api/jobs/${j.id}/executions`)
+            ).json();
+            assert.deepEqual(
+              history.executions.map((attempt: any) => attempt.status),
+              ["failed", "completed"],
+            );
+            assert.equal(
+              history.executions[0].result.verification.checks[0].output,
+              "Example assertion failed",
+            );
+          } finally {
+            deps.execute = execute;
+            deps.github = old;
+          }
         },
       );
       await t.test(

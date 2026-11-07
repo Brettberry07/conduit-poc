@@ -27,6 +27,8 @@ export type Check = {
   timed_out: boolean;
   output?: string;
 };
+export const failedCheck = (check: Check) =>
+  check.exit_code !== 0 || check.timed_out;
 export type Execution = { thread_id?: string; checks: Check[] };
 // Each job gets writable dependencies without modifying the user's checkout.
 // Replace links created by older workers, but preserve an existing private copy.
@@ -142,9 +144,10 @@ export async function executeWorktree(
   stopping: () => boolean,
   phase: (value: "running" | "verifying") => Promise<void>,
   remember: (dir: string) => Promise<void>,
+  previousFailures?: readonly Check[],
 ): Promise<Execution> {
   const timeout = timeoutMs();
-  const instructions = developmentContext(job);
+  const instructions = developmentContext(job, previousFailures);
   if (process.platform !== "darwin")
     throw Error(
       "Phase 4 Codex execution requires the tested macOS Codex sandbox",
