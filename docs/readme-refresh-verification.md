@@ -37,3 +37,23 @@ Save the captures as `docs/screenshots/desktop-connect.png` and
 `docs/screenshots/desktop-board.png`, then embed them in README.md using those
 relative paths. Inspect the images and diagram at normal GitHub README width.
 No mobile captures are required. Conduit manages commits and publication.
+
+## Screenshot completion (2026-11-08, review environment)
+
+The outstanding captures above were completed from a browser-capable review
+environment after the worker run, following the spec in that section:
+
+1. `docs/screenshots/desktop-connect.png` - disconnected Connect screen at
+   1440x1000 from a local production build of this branch (code head 2274abd),
+   built with the public Supabase Auth env present so the email sign-in form
+   renders as it does on the configured deployment. No credentials or personal
+   data are visible; the key field is empty.
+2. `docs/screenshots/desktop-board.png` - connected job board at 1440x1000
+   from the same local build, populated entirely with sanitized fixture jobs
+   and connected with a non-real demo key.
+
+Both are embedded in README.md under Screenshots with demo-data captions. The
+pre-redesign `desktop-board.png` was replaced by the fresh capture; the other
+three pre-redesign PNGs remain on disk as historical assets for a future
+cleanup decision. These docs-only commits were made through the GitHub web UI
+as the repository owner; no worker revision was consumed.
