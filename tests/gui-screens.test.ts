@@ -120,6 +120,27 @@ for (const status of ["blocked", "failed"]) {
   });
 }
 
+for (const signal of ["offline", "stale"]) {
+  test(`needs-you renders a neutral worker-health badge for ${signal} workers`, () => {
+    const html = render("needs-you", {
+      jobs: data.jobs.filter((job) => job.status === "queued"),
+      workers: [
+        {
+          worker_id: "unavailable-worker",
+          available: signal !== "offline",
+          busy: false,
+          last_seen_at: new Date(
+            now - (signal === "stale" ? 60_000 : 0),
+          ).toISOString(),
+        },
+      ],
+      details: {},
+    });
+    assert.match(html, /class="status-badge muted">Offline<\/span>/);
+    assert.doesNotMatch(html, /status-blocked|>blocked<\/span>/i);
+  });
+}
+
 test("progress is shown only for running jobs", () => {
   assert.match(
     render("board"),

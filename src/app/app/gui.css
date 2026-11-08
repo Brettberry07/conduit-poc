@@ -929,3 +929,134 @@ body:has(.console) {
   align-items: center;
   gap: var(--space-2);
 }
+
+/* Detail surfaces keep evidence readable at desktop and phone widths. */
+.console .job h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console .sheet > h1 {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.console .sheet > code {
+  overflow-wrap: anywhere;
+}
+.console .detail-prose {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.console .detail-panel {
+  margin-top: var(--space-6);
+  padding: var(--space-5);
+  background: var(--subtle);
+  border-radius: var(--radius-12);
+}
+.console .detail-panel h2 {
+  margin-top: 0;
+}
+.console .detail-panel dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+}
+.console .detail-panel dt {
+  color: var(--muted);
+}
+.console .detail-panel dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.console .pr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--space-11);
+}
+.console .timeline ol {
+  padding: 0;
+  border: 0;
+  list-style: none;
+}
+.console .timeline ol > li {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+.console .timeline ol > li > .icon {
+  margin-top: var(--space-1);
+  color: var(--accent);
+}
+.console .timeline ol > li > div {
+  min-width: 0;
+  flex: 1;
+}
+.console .timeline ol > li > div > strong,
+.console .timeline ol > li > div > span,
+.console .timeline ol > li > div > time {
+  display: block;
+}
+.console .timeline time {
+  color: var(--muted);
+}
+.console .check-list,
+.console .file-list {
+  list-style: none;
+  padding: 0;
+}
+.console .check-list li,
+.console .file-list li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+.console .check-list li > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.console .check-list strong {
+  font-size: var(--text-11);
+  text-transform: capitalize;
+}
+.console .check-list .icon {
+  align-self: flex-start;
+  margin-top: var(--space-1);
+}
+.console .check-passed {
+  color: var(--completed);
+}
+.console .check-failed {
+  color: var(--failed);
+}
+.console .check-skipped,
+.console .check-not-reported {
+  color: var(--muted);
+}
+.console .file-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.console .file-list code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console .file-list li > span {
+  color: var(--muted);
+  font-size: var(--text-11);
+}
+.console .raw-data {
+  margin-top: var(--space-8);
+}
+.console summary {
+  cursor: pointer;
+  min-height: var(--space-11);
+  padding: var(--space-3) 0;
+  color: var(--muted);
+}

@@ -1,3 +1,9 @@
+import { landingPage } from "../lib/public-page";
+
+export const dynamic = "force-static";
+
 export function GET() {
-  return Response.json({ service: "Conduit POC", api: "/api/jobs" });
+  return new Response(landingPage(), {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
 }

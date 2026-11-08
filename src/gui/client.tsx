@@ -46,6 +46,8 @@ const iconPaths = {
   connection: "M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
   search: "M10.5 10.5L14 14M11 6.5a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0",
   external: "M9 2h5v5M14 2L7 9M6 3H2v11h11v-4",
+  pullRequest:
+    "M4 5v6M12 11V7a4 4 0 0 0-4-4M9 1L7 3l2 2M6 3a2 2 0 1 1-4 0 2 2 0 0 1 4 0M6 13a2 2 0 1 1-4 0 2 2 0 0 1 4 0M14 13a2 2 0 1 1-4 0 2 2 0 0 1 4 0",
   close: "M4 4l8 8M12 4l-8 8",
   queued: "M8 3v5l3 2M14 8a6 6 0 1 1-12 0 6 6 0 0 1 12 0",
   running: "M6 3l7 5-7 5z",
@@ -95,14 +97,64 @@ function Modal({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
-    ref.current?.showModal();
-    return () => previous?.focus();
+    const dialog = ref.current!;
+    const body = document.body;
+    const root = document.documentElement;
+    const { scrollX, scrollY } = window;
+    const bodyStyle = body.getAttribute("style");
+    const overflow = root.style.overflow;
+    const scrollBehavior = root.style.scrollBehavior;
+    // Preserve the visible page on touch browsers and prevent programmatic
+    // root scrolling as well as wheel/touch scrolling.
+    Object.assign(body.style, {
+      position: "fixed",
+      top: `-${scrollY}px`,
+      left: `-${scrollX}px`,
+      width: "100%",
+      overflow: "hidden",
+    });
+    root.style.overflow = "clip";
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      if (bodyStyle === null) body.removeAttribute("style");
+      else body.setAttribute("style", bodyStyle);
+      root.style.overflow = overflow;
+      root.style.scrollBehavior = "auto";
+      window.scrollTo(scrollX, scrollY);
+      root.style.scrollBehavior = scrollBehavior;
+      previous?.focus({ preventScroll: true });
+    };
   }, []);
   return (
     <dialog
       ref={ref}
       className={sheet ? "sheet" : ""}
       aria-label={label}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key !== "Tab") return;
+        const dialog = e.currentTarget;
+        const controls = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+          ),
+        ).filter(
+          (element) =>
+            element.tabIndex >= 0 &&
+            !element.matches(":disabled") &&
+            !element.closest("[inert]") &&
+            element.getClientRects().length > 0 &&
+            getComputedStyle(element).visibility !== "hidden",
+        );
+        // Handle every Tab so native traversal cannot visit the page body.
+        e.preventDefault();
+        const current = controls.indexOf(document.activeElement as HTMLElement);
+        const next = e.shiftKey
+          ? (current <= 0 ? controls.length : current) - 1
+          : (current + 1) % controls.length;
+        (controls[next] ?? dialog).focus();
+      }}
       onCancel={(e) => {
         e.preventDefault();
         close();
@@ -613,15 +665,23 @@ function Github({ url }: { url: unknown }) {
 }
 function Json({ value }: { value: unknown }) {
   return (
-    <pre>
-      {value == null
-        ? "Not reported"
-        : typeof value === "string"
-          ? value
-          : JSON.stringify(value, null, 2)}
-    </pre>
+    <details className="raw-data">
+      <summary>Raw JSON</summary>
+      <pre tabIndex={0}>{JSON.stringify(value, null, 2) ?? "Not reported"}</pre>
+    </details>
   );
 }
+function RelativeTime({ value }: { value?: string | null }) {
+  const { now } = useContext(Context) ?? {};
+  return value && Number.isFinite(Date.parse(value)) ? (
+    <time dateTime={value} title={new Date(value).toLocaleString()}>
+      {age(value, now)}
+    </time>
+  ) : (
+    <span className="muted">Not reported</span>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   const known = [
     "queued",
@@ -658,11 +718,11 @@ function JobCard({ job }: { job: Job }) {
   return (
     <article className="job">
       <button className="job-open" onClick={() => c.select(job)}>
-        <h3>{job.title}</h3>
+        <h3 title={job.title}>{job.title}</h3>
         <StatusBadge status={review ? "review" : job.status} />
         <span className="job-meta">
           <code>{job.id.slice(0, 8)}</code>
-          <time dateTime={job.created_at}>{age(job.created_at, c.now)}</time>
+          <RelativeTime value={job.created_at} />
         </span>
         {job.status === "running" && (
           <div className="job-progress">
@@ -679,52 +739,204 @@ function JobCard({ job }: { job: Job }) {
     </article>
   );
 }
-function Checks({ result }: { result?: Record<string, unknown> | null }) {
-  const checks = result?.checks;
-  return Array.isArray(checks) ? (
-    <ul>
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+export function Checks({
+  result,
+}: {
+  result?: Record<string, unknown> | null;
+}) {
+  const verification = record(result?.verification);
+  const checks = verification.checks ?? result?.checks;
+  return Array.isArray(checks) && checks.length ? (
+    <ul className="check-list">
       {checks.map((v, i) => {
-        const x = (v && typeof v === "object" ? v : {}) as Record<
-          string,
-          unknown
-        >;
+        const x = record(v);
+        const state =
+          x.timed_out === true
+            ? "failed"
+            : x.status === "skipped" || x.skipped === true
+              ? "skipped"
+              : typeof x.exit_code === "number"
+                ? x.exit_code === 0
+                  ? "passed"
+                  : "failed"
+                : "not reported";
         return (
-          <li key={i}>
-            {String(x.name ?? x.command ?? "Check")} · exit{" "}
-            {String(x.exit_code ?? "not reported")} · timed out:{" "}
-            {String(x.timed_out ?? "not reported")}
+          <li key={i} className={`check-${state.replaceAll(" ", "-")}`}>
+            <Icon
+              name={
+                state === "passed"
+                  ? "completed"
+                  : state === "failed"
+                    ? "failed"
+                    : "blocked"
+              }
+            />
+            <span>{String(x.name ?? x.command ?? "Check")}</span>
+            <strong>{x.timed_out === true ? "Timed out" : state}</strong>
           </li>
         );
       })}
     </ul>
-  ) : null;
+  ) : (
+    <p className="muted">
+      Verification{" "}
+      {String(verification.status ?? "not reported").replaceAll("_", " ")}. No
+      checks reported.
+    </p>
+  );
 }
-function Timeline({ job, detail }: { job: Job; detail?: Detail }) {
+export function Timeline({ job, detail }: { job: Job; detail?: Detail }) {
   return (
-    <div className="timeline">
-      <h4>Execution details</h4>
+    <section className="timeline">
+      <h2>Execution timeline</h2>
+      <p className="muted">Current phase · {job.phase ?? "Not reported"}</p>
       <ol>
-        {job.claimed_at && <li>Claimed · {age(job.claimed_at)}</li>}
-        <li>Current phase: {job.phase ?? "not reported"}</li>
+        <li>
+          <Icon name="queued" />
+          <div>
+            <strong>Queued</strong>
+            <RelativeTime value={job.created_at} />
+          </div>
+        </li>
+        {job.claimed_at && (
+          <li>
+            <Icon name="running" />
+            <div>
+              <strong>Claimed by worker</strong>
+              <RelativeTime value={job.claimed_at} />
+            </div>
+          </li>
+        )}
         {detail?.executions?.map((e) => (
           <li key={e.attempt}>
-            Attempt {e.attempt} · {e.status} · {age(e.started_at)}
-            {e.error && <p>{e.error}</p>}
-            <Checks result={e.result} />
+            <Icon
+              name={
+                e.status === "completed"
+                  ? "completed"
+                  : e.status === "failed"
+                    ? "failed"
+                    : e.status === "blocked"
+                      ? "blocked"
+                      : "running"
+              }
+            />
+            <div>
+              <strong>
+                Attempt {e.attempt} · {e.status.replaceAll("_", " ")}
+              </strong>
+              <span>
+                Started <RelativeTime value={e.started_at} />
+                {e.completed_at && (
+                  <>
+                    {" "}
+                    · Finished <RelativeTime value={e.completed_at} />
+                  </>
+                )}
+              </span>
+              {e.error && <p className="failure">{e.error}</p>}
+              <Checks result={e.result} />
+            </div>
           </li>
         ))}
-        <li>
-          Publication:{" "}
-          {detail?.publication?.publication_state ?? "not reported"}
-        </li>
       </ol>
-      <Checks result={job.result} />
-      {detail?.errors?.map((e) => (
-        <p className="muted" key={e}>
-          {e}
+      {!detail?.executions?.length && (
+        <p className="muted">No execution attempts reported.</p>
+      )}
+    </section>
+  );
+}
+export function PublicationPanel({
+  publication,
+}: {
+  publication?: Detail["publication"];
+}) {
+  const pr = publication?.pull_request;
+  const url = githubUrl(pr?.url);
+  return (
+    <section className="detail-panel">
+      <h2>Publication</h2>
+      <p>
+        {publication?.publication_state?.replaceAll("_", " ") ?? "Not reported"}
+      </p>
+      {url && (
+        <a
+          className="pr-link"
+          href={url}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          <Icon name="pullRequest" />
+          Pull request #{pr!.number}
+          <Icon name="external" />
+        </a>
+      )}
+      {pr && (
+        <p className="muted">
+          {pr.merged ? "Merged" : `${pr.draft ? "Draft · " : ""}${pr.state}`}
         </p>
-      ))}
-    </div>
+      )}
+      <dl>
+        <dt>Branch</dt>
+        <dd>
+          <code>{publication?.branch ?? "Not reported"}</code>
+        </dd>
+        <dt>Head commit</dt>
+        <dd>
+          <code title={publication?.head_commit ?? undefined}>
+            {publication?.head_commit?.slice(0, 8) ?? "Not reported"}
+          </code>
+        </dd>
+        <dt>PR observed</dt>
+        <dd>
+          <RelativeTime value={publication?.pull_request_observed_at} />
+        </dd>
+      </dl>
+      <p className="muted">Recorded publication data. PR state is not live.</p>
+    </section>
+  );
+}
+export function ChangedFiles({ files }: { files?: Detail["files"] }) {
+  if (!files) return <p className="muted">Changed files not reported.</p>;
+  const entries = files.map(record);
+  return (
+    <section className="detail-panel">
+      <h2>
+        Changed files <span className="muted">{files.length}</span>
+      </h2>
+      <p className="file-counts">
+        {[
+          "added",
+          "modified",
+          "deleted",
+          "renamed",
+          "copied",
+          "type_changed",
+        ].map((status) => {
+          const count = entries.filter((f) => f.status === status).length;
+          return count || ["added", "modified", "deleted"].includes(status) ? (
+            <span key={status}>
+              {count} {status.replaceAll("_", " ")}
+            </span>
+          ) : null;
+        })}
+      </p>
+      <ul className="file-list">
+        {entries.map((f, i) => (
+          <li key={i}>
+            <code title={String(f.path)}>
+              {String(f.path ?? "Unknown path")}
+            </code>
+            <span>{String(f.status ?? "Unknown")}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted">Latest attempt · up to 100 files reported.</p>
+    </section>
   );
 }
 function useDelayedLoading(loading: boolean) {
@@ -922,15 +1134,13 @@ export function Screen({ view }: { view: string }) {
           )}
           {needs.map((n) => (
             <article key={n.id} className={`need severity-${n.severity}`}>
-              <StatusBadge
-                status={
-                  n.severity === 0
-                    ? n.job!.status
-                    : n.severity === 2
-                      ? "review"
-                      : "blocked"
-                }
-              />
+              {!n.job ? (
+                <span className="status-badge muted">Offline</span>
+              ) : (
+                <StatusBadge
+                  status={n.severity === 2 ? "review" : n.job.status}
+                />
+              )}
               <h2>{n.why}</h2>
               {n.job && (
                 <p>
@@ -984,9 +1194,7 @@ function JobActivity({
                   <> · attempt {event.data.attempt}</>
                 )}
                 {" · "}
-                <time dateTime={event.occurred_at}>
-                  {new Date(event.occurred_at).toLocaleString()}
-                </time>
+                <RelativeTime value={event.occurred_at} />
                 {pr && event.data.number === pr.number && (
                   <>
                     {" "}
@@ -1080,30 +1288,43 @@ function JobDetail({
         publication={details[job.id]?.publication ?? detail?.publication}
       />
       <h2>Instructions</h2>
-      <Json value={job.instructions ?? job.description} />
+      <p className="detail-prose">
+        {job.instructions ?? job.description ?? "Not reported"}
+      </p>
       <h2>Acceptance criteria</h2>
-      <Json value={job.acceptance_criteria} />
-      <h2>Result summary & verification</h2>
-      <Json value={job.result} />
-      <h2>Error</h2>
-      <Json value={job.error} />
+      <p className="detail-prose">
+        {job.acceptance_criteria ?? "Not reported"}
+      </p>
+      <h2>Result & verification</h2>
+      <p className="detail-prose">
+        {typeof job.result?.summary === "string"
+          ? job.result.summary
+          : "No result summary reported."}
+      </p>
+      <Checks result={job.result} />
+      {job.error && (
+        <section className="detail-panel failure">
+          <h2>Error</h2>
+          <p className="detail-prose">{job.error}</p>
+        </section>
+      )}
       {!detail ? (
-        <p className="skeleton">Loading job details…</p>
+        <p role="status">Loading job details…</p>
       ) : (
         <>
+          {detail.errors?.map((error) => (
+            <p role="status" key={error}>
+              {error}
+            </p>
+          ))}
           <Timeline job={job} detail={detail} />
-          <h2>Executions</h2>
-          <Json value={detail.executions} />
-          <h2>Changed files</h2>
-          <Json value={detail.files} />
-          <p className="muted">
-            Latest attempt; up to 100 files reported by this endpoint.
-          </p>
-          <h2>Publication</h2>
-          <Github url={detail.publication?.pull_request?.url} />
-          <Json value={detail.publication} />
+          <ChangedFiles files={detail.files} />
+          <PublicationPanel
+            publication={details[job.id]?.publication ?? detail.publication}
+          />
         </>
       )}
+      <Json value={{ job, ...detail }} />
     </Modal>
   );
 }
