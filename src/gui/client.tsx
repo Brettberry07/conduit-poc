@@ -56,6 +56,8 @@ export function OwnerActions({
   projects?: { id: string; name: string }[];
 }) {
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -65,7 +67,8 @@ export function OwnerActions({
     create = scopes.includes("console:create");
   const pr = publication?.pull_request;
   async function run(path: string, method: string, body: unknown) {
-    if (!write || busy) return;
+    if (!write || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError("");
     setNotice("");
@@ -75,6 +78,7 @@ export function OwnerActions({
     } catch (e) {
       setError(message(e));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -143,77 +147,98 @@ export function OwnerActions({
               </button>
               <button
                 disabled={busy || !write}
-                onClick={() =>
-                  void run(`/api/initiatives/${i.id}`, "PATCH", {
-                    expected_status: i.status,
-                    status: "cancelled",
-                  })
-                }
+                onClick={() => setCancelTarget(i.id)}
               >
                 Cancel
               </button>
+              {cancelTarget === i.id && (
+                <div role="group" aria-label={`Cancel ${i.title}?`}>
+                  <p>
+                    Cancel {i.title}? This cancels the initiative and its
+                    remaining work.
+                  </p>
+                  <button
+                    disabled={busy || !write}
+                    onClick={() => {
+                      setCancelTarget(null);
+                      void run(`/api/initiatives/${i.id}`, "PATCH", {
+                        expected_status: i.status,
+                        status: "cancelled",
+                      });
+                    }}
+                  >
+                    Confirm cancellation
+                  </button>
+                  <button disabled={busy} onClick={() => setCancelTarget(null)}>
+                    Keep initiative
+                  </button>
+                </div>
+              )}
             </div>
           ))}
       {!job && create && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run("/api/jobs", "POST", {
-              title,
-              instructions,
-              task: "development",
-              project_id: project,
-            });
-          }}
-        >
-          <label>
-            Project
-            <select
-              required
-              value={project}
-              disabled={busy}
-              onChange={(e) => setProject(e.target.value)}
-            >
-              <option value="">Select project</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Job title
-            <input
-              required
-              maxLength={200}
-              value={title}
-              disabled={busy}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </label>
-          <label>
-            Job instructions
-            <textarea
-              required
-              maxLength={12000}
-              value={instructions}
-              disabled={busy}
-              onChange={(e) => setInstructions(e.target.value)}
-            />
-          </label>
-          <button
-            disabled={
-              busy ||
-              !write ||
-              !title.trim() ||
-              !instructions.trim() ||
-              !project
-            }
+        <details className="create-job">
+          <summary>Create job</summary>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run("/api/jobs", "POST", {
+                title,
+                instructions,
+                task: "development",
+                project_id: project,
+              });
+            }}
           >
-            Create job
-          </button>
-        </form>
+            <label>
+              Project
+              <select
+                required
+                value={project}
+                disabled={busy}
+                onChange={(e) => setProject(e.target.value)}
+              >
+                <option value="">Select project</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Job title
+              <input
+                required
+                maxLength={200}
+                value={title}
+                disabled={busy}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+            <label>
+              Job instructions
+              <textarea
+                required
+                maxLength={12000}
+                value={instructions}
+                disabled={busy}
+                onChange={(e) => setInstructions(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={
+                busy ||
+                !write ||
+                !title.trim() ||
+                !instructions.trim() ||
+                !project
+              }
+            >
+              Create job
+            </button>
+          </form>
+        </details>
       )}
     </section>
   );
@@ -450,41 +475,48 @@ export function Shell({ children }: { children: React.ReactNode }) {
       })();
     return () => controller.abort();
   }, [key, read, actionVersion]);
+  const writeInFlight = useRef(false);
   async function write(path: string, method: string, body: unknown) {
-    if (
-      method === "POST" &&
-      (path === "/api/jobs" || path.endsWith("/revisions"))
-    ) {
-      const manifest = await read(
-        "/api/agent/manifest",
-        key,
-        new AbortController().signal,
-      );
-      body = {
-        ...(body as Record<string, unknown>),
-        policy_version: manifest.policy_version,
+    if (writeInFlight.current) return;
+    writeInFlight.current = true;
+    try {
+      if (
+        method === "POST" &&
+        (path === "/api/jobs" || path.endsWith("/revisions"))
+      ) {
+        const manifest = await read(
+          "/api/agent/manifest",
+          key,
+          new AbortController().signal,
+        );
+        body = {
+          ...(body as Record<string, unknown>),
+          policy_version: manifest.policy_version,
+        };
+      }
+      const init = {
+        method,
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify(body),
+        credentials: "omit" as const,
+        redirect: "error" as const,
       };
+      const response = /^cnd_live_/.test(key)
+        ? await fetch(path, init)
+        : await auth.current!.fetch(path, init, key);
+      const data = await response.json();
+      if (!response.ok) {
+        if (response.status === 403) setIdentity({ token: "", scopes: [] });
+        throw Error(`${response.status}: ${data.error ?? "Request failed"}`);
+      }
+      setActionVersion((v) => v + 1);
+    } finally {
+      writeInFlight.current = false;
     }
-    const init = {
-      method,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": crypto.randomUUID(),
-      },
-      body: JSON.stringify(body),
-      credentials: "omit" as const,
-      redirect: "error" as const,
-    };
-    const response = /^cnd_live_/.test(key)
-      ? await fetch(path, init)
-      : await auth.current!.fetch(path, init, key);
-    const data = await response.json();
-    if (!response.ok) {
-      if (response.status === 403) setIdentity({ token: "", scopes: [] });
-      throw Error(`${response.status}: ${data.error ?? "Request failed"}`);
-    }
-    setActionVersion((v) => v + 1);
   }
   const pathname = usePathname(),
     router = useRouter(),
@@ -1236,7 +1268,14 @@ export function Screen({ view }: { view: string }) {
   return (
     <section className="screen">
       <header>
-        <p className="eyebrow">CONDUIT · READ ONLY</p>
+        <p className="eyebrow">
+          CONDUIT ·{" "}
+          {c.scopes?.some(
+            (scope) => scope === "console:action" || scope === "console:create",
+          )
+            ? "OWNER"
+            : "READ ONLY"}
+        </p>
         <h1>
           {view === "board"
             ? "Job board"

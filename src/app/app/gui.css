@@ -1061,6 +1061,8 @@ body:has(.console) {
   color: var(--muted);
 }
 .console .owner-actions {
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--space-4);
   margin-block: var(--space-4);
   background: var(--surface);
@@ -1076,6 +1078,8 @@ body:has(.console) {
 .console .owner-actions input,
 .console .owner-actions textarea,
 .console .owner-actions select {
+  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
   padding: var(--space-2);
   color: var(--ink);

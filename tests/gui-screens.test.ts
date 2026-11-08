@@ -2,7 +2,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConsoleContext, Screen, type ConsoleData } from "../src/gui/client";
+import {
+  ConsoleContext,
+  Screen,
+  OwnerActions,
+  type ConsoleData,
+} from "../src/gui/client";
+
+test("owner creation starts collapsed and standard viewers have no controls", () => {
+  assert.equal(
+    renderToStaticMarkup(createElement(OwnerActions, { scopes: [] })),
+    "",
+  );
+  const html = renderToStaticMarkup(
+    createElement(OwnerActions, { scopes: ["console:create"] }),
+  );
+  assert.match(
+    html,
+    /<details class="create-job"><summary>Create job<\/summary>/,
+  );
+  assert.doesNotMatch(html, /<details[^>]*\bopen/);
+});
+
+test("dashboard labels reflect either owner capability", () => {
+  assert.match(render("board"), /CONDUIT · READ ONLY/);
+  for (const scope of ["console:create", "console:action"]) {
+    assert.match(render("board", { scopes: [scope] }), /CONDUIT · OWNER/);
+  }
+});
 
 const now = Date.parse("2026-11-07T18:00:00Z");
 const data: ConsoleData = {

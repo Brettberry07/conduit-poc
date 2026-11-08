@@ -1,6 +1,35 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readApi } from "../src/gui/auth";
+test("owner dashboard reads pass the exact client GET allowlist", async () => {
+  const paths = [
+    "/api/console/identity",
+    "/api/initiatives",
+    "/api/projects",
+    "/api/agent/manifest",
+  ];
+  const calls: string[] = [];
+  const read = (path: string) =>
+    readApi(
+      path,
+      "owner-key",
+      new AbortController().signal,
+      async (actual, init, token) => {
+        calls.push(actual);
+        assert.equal(init.method, "GET");
+        assert.equal(token, "owner-key");
+        return Response.json({ ok: true });
+      },
+    );
+  for (const path of paths) assert.deepEqual(await read(path), { ok: true });
+  for (const path of [
+    "/api/admin",
+    ...paths.flatMap((path) => [path + "/extra", path + "?extra=1"]),
+  ]) {
+    await assert.rejects(read(path), /Unsupported read/);
+  }
+  assert.deepEqual(calls, paths);
+});
 import {
   column,
   dependencyLabel,
