@@ -931,11 +931,14 @@ body:has(.console) {
 }
 
 /* Detail surfaces keep evidence readable at desktop and phone widths. */
-.console .job h3,
-.console .sheet > h1 {
+.console .job h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.console .sheet > h1 {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .console .sheet > code {
   overflow-wrap: anywhere;

@@ -97,14 +97,64 @@ function Modal({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
-    ref.current?.showModal();
-    return () => previous?.focus();
+    const dialog = ref.current!;
+    const body = document.body;
+    const root = document.documentElement;
+    const { scrollX, scrollY } = window;
+    const bodyStyle = body.getAttribute("style");
+    const overflow = root.style.overflow;
+    const scrollBehavior = root.style.scrollBehavior;
+    // Preserve the visible page on touch browsers and prevent programmatic
+    // root scrolling as well as wheel/touch scrolling.
+    Object.assign(body.style, {
+      position: "fixed",
+      top: `-${scrollY}px`,
+      left: `-${scrollX}px`,
+      width: "100%",
+      overflow: "hidden",
+    });
+    root.style.overflow = "clip";
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      if (bodyStyle === null) body.removeAttribute("style");
+      else body.setAttribute("style", bodyStyle);
+      root.style.overflow = overflow;
+      root.style.scrollBehavior = "auto";
+      window.scrollTo(scrollX, scrollY);
+      root.style.scrollBehavior = scrollBehavior;
+      previous?.focus({ preventScroll: true });
+    };
   }, []);
   return (
     <dialog
       ref={ref}
       className={sheet ? "sheet" : ""}
       aria-label={label}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key !== "Tab") return;
+        const dialog = e.currentTarget;
+        const controls = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+          ),
+        ).filter(
+          (element) =>
+            element.tabIndex >= 0 &&
+            !element.matches(":disabled") &&
+            !element.closest("[inert]") &&
+            element.getClientRects().length > 0 &&
+            getComputedStyle(element).visibility !== "hidden",
+        );
+        // Handle every Tab so native traversal cannot visit the page body.
+        e.preventDefault();
+        const current = controls.indexOf(document.activeElement as HTMLElement);
+        const next = e.shiftKey
+          ? (current <= 0 ? controls.length : current) - 1
+          : (current + 1) % controls.length;
+        (controls[next] ?? dialog).focus();
+      }}
       onCancel={(e) => {
         e.preventDefault();
         close();
@@ -1084,15 +1134,13 @@ export function Screen({ view }: { view: string }) {
           )}
           {needs.map((n) => (
             <article key={n.id} className={`need severity-${n.severity}`}>
-              <StatusBadge
-                status={
-                  n.severity === 0
-                    ? n.job!.status
-                    : n.severity === 2
-                      ? "review"
-                      : "blocked"
-                }
-              />
+              {!n.job ? (
+                <span className="status-badge muted">Offline</span>
+              ) : (
+                <StatusBadge
+                  status={n.severity === 2 ? "review" : n.job.status}
+                />
+              )}
               <h2>{n.why}</h2>
               {n.job && (
                 <p>
@@ -1232,7 +1280,7 @@ function JobDetail({
   return (
     <Modal label={`Job details: ${job.title}`} close={close} sheet>
       <p className="eyebrow">JOB DETAIL · {job.status}</p>
-      <h1 title={job.title}>{job.title}</h1>
+      <h1>{job.title}</h1>
       <code>{job.id}</code>
       <JobActivity
         events={events}
