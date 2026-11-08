@@ -8,17 +8,35 @@ Conduit connects an assistant such as Instinct to a local Codex worker through a
 
 The API coordinates the work; your local machine executes it. Each development task gets an isolated Git worktree, and verified changes become a **draft PR for human review**.
 
-[Workflow](#how-it-works) · [Get started](#get-started) · [Security](#boundaries-and-security) · [Documentation](docs/README.md)
+[Console](#read-only-console) · [Workflow](#how-it-works) · [Get started](#get-started) · [Security](#boundaries-and-security) · [Documentation](docs/README.md)
 
-## Screenshots
+## Read-only console
 
-![Conduit job board (desktop) - fixture data](docs/screenshots/desktop-board.png)
+Open [`/app`](https://conduit-poc.vercel.app/app) to connect; it redirects to `/app/board`. The console provides three views:
 
-![Job detail drawer (desktop) - fixture data](docs/screenshots/desktop-board-detail.png)
+| View                             | What it shows                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Job board** · `/app/board`     | Jobs grouped by queued, running, completed and failed / blocked status, with title, ID and status search. |
+| **Active** · `/app/active`       | Reported workers, freshness, assigned jobs, leases, execution attempts, checks and publication state.     |
+| **Needs you** · `/app/needs-you` | Review and recovery signals derived from reported jobs, dependencies and worker availability.             |
 
-![Active workers view (desktop) - fixture data](docs/screenshots/desktop-active.png)
+Open a job for instructions, results, execution history, verification outcomes, changed files, recorded publication details and recent activity. Raw JSON remains available in a disclosure. GitHub links lead to external review; displayed commands are selectable text. The console cannot submit, revise, retry, approve, merge or clean up jobs.
 
-![Needs-you queue (desktop) - fixture data](docs/screenshots/desktop-needsyou.png)
+Connect with a **read-only viewer key** scoped to `jobs:read`. Keys stay in React memory and are forgotten on refresh or disconnect. Console data reads are same-origin GET requests with bearer authentication. Email/password sign-in and sign-up appear when Supabase Auth is configured; an administrator must link the account to a workspace principal before it can read that principal's jobs. Email sessions persist in localStorage across refreshes. Authentication requests go directly to Supabase Auth, separately from the same-origin console reads.
+
+The console polls about every three seconds while visible and retains the last successful snapshot with a warning when reads fail. Counts and attention signals cover the latest 100 loaded jobs. Job sheets load evidence on opening; recent activity refreshes every five seconds while visible. Publication details are recorded observations, not a live guarantee of GitHub state.
+
+See [console access, storage and data limits](docs/gui.md) for setup and shortcuts.
+
+### Screenshots
+
+![Connect screen with email sign-in and the memory-only read-only key field](docs/screenshots/desktop-connect.png)
+
+_Connect screen with email sign-in (shown when Supabase Auth is configured) and the read-only key option. Captured from a local demo build; no real credentials or data._
+
+![Job board grouping jobs by queued, in progress, completed and failed/blocked](docs/screenshots/desktop-board-redesigned.png)
+
+_Job board with demo fixture data; counts, badges and progress match the live console's behavior._
 
 ## What it can do
 
@@ -39,14 +57,24 @@ The implementation also supports success/failure simulation jobs for connectivit
 ## How it works
 
 ```mermaid
-flowchart TD
-    A[Instinct / API client] -->|HTTPS| B[Next.js API on Vercel]
-    B <-->|Verified TLS| C[(Supabase PostgreSQL queue)]
-    D[Local Mac worker] -->|Outbound HTTPS| B
-    D --> E[Isolated Git worktree]
-    E --> F[Codex + offline checks]
-    F -->|Trusted worker publishes| G[GitHub draft PR]
-    G --> H[Human diff review]
+flowchart TB
+    subgraph Coordination
+        direction LR
+        A[Assistant / API client] -->|HTTPS| B[Next.js API]
+        V[Read-only console] -->|GET| B
+        B <-->|TLS| C[(PostgreSQL queue)]
+    end
+    subgraph Execution
+        direction LR
+        D[Local worker] --> E[Git worktree]
+        E --> F[Codex + offline checks]
+    end
+    subgraph Review
+        direction LR
+        G[GitHub draft PR] --> H[Human review]
+    end
+    Coordination <-->|Worker outbound HTTPS| Execution
+    Execution -->|Trusted worker publishes| Review
 ```
 
 The worker claims and reports jobs through outbound API requests; it needs no inbound tunnel or direct database connection. Codex and verification run in the sandbox; the trusted worker handles GitHub authentication, commits and publication outside it.
@@ -82,7 +110,7 @@ The full suite starts disposable loopback PostgreSQL clusters, a real HTTP API a
 - **Local development:** follow the [local setup guide](docs/operator-guide.md#local-setup-and-full-verification) for `npm run db:local`, restricted runtime provisioning, private configuration and `npm run dev`. Preserve existing configuration before bootstrap commands write local files.
 - **Hosted installation:** follow the [Vercel + Supabase runbook](docs/deployment.md). Schema migration, runtime credentials and key administration are separate operator responsibilities.
 
-### 3. Connect a worker
+### 3. Connect the console
 
 | Credential                   | Access                                                                   | Browser storage                          |
 | ---------------------------- | ------------------------------------------------------------------------ | ---------------------------------------- |
@@ -92,6 +120,8 @@ The full suite starts disposable loopback PostgreSQL clusters, a real HTTP API a
 See [console authentication and storage risks](docs/gui.md) and [account administration](docs/operator-guide.md#supabase-auth-account-links). Supabase Auth does not change worker authentication or `/auth-check`.
 
 For GUI access, use `npm run key -- create --type viewer --principal ID --name NAME` with the job owner's principal. This key has only `jobs:read` and cannot create, revise, claim, or update jobs. Paste it into Connect; the GUI holds it in React memory only.
+
+### 4. Connect a worker
 
 Issue separate submitter and worker keys through the [local key-management CLI](docs/operator-guide.md#persistent-api-keys), then start the worker against your API:
 
@@ -146,3 +176,7 @@ The read-only web console supports API keys and Supabase Auth email/password acc
 | [docs/](docs/README.md)                                       | Setup, integration, recovery and evidence index   |
 
 Start with the [documentation index](docs/README.md) for the operator guides, API contracts and retained implementation history.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
