@@ -48,12 +48,13 @@ environment after the worker run, following the spec in that section:
    built with the public Supabase Auth env present so the email sign-in form
    renders as it does on the configured deployment. No credentials or personal
    data are visible; the key field is empty.
-2. `docs/screenshots/desktop-board.png` - connected job board at 1440x1000
+2. `docs/screenshots/desktop-board-redesigned.png` - connected job board at 1440x1000
    from the same local build, populated entirely with sanitized fixture jobs
    and connected with a non-real demo key.
 
 Both are embedded in README.md under Screenshots with demo-data captions. The
-pre-redesign `desktop-board.png` was replaced by the fresh capture; the other
-three pre-redesign PNGs remain on disk as historical assets for a future
-cleanup decision. These docs-only commits were made through the GitHub web UI
-as the repository owner; no worker revision was consumed.
+board capture uses a distinct filename (`desktop-board-redesigned.png`) so
+GitHub's image CDN cannot serve the cached pre-redesign bytes at the old path.
+The four pre-redesign PNGs were removed as obsolete. These docs-only commits
+were made through the GitHub web UI as the repository owner; no worker
+revision was consumed.
