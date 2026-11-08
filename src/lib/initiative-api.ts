@@ -415,6 +415,12 @@ export async function initiativeApi(
   }
   if (method === "PATCH" && !op) {
     const input = lifecycleInput.parse(await readBody(req));
+    if (
+      key.scopes.includes("console:action") &&
+      !key.scopes.includes("jobs:revise") &&
+      !["paused", "active", "cancelled"].includes(input.status)
+    )
+      return json({ error: "Forbidden" }, 403);
     return transaction(db, async (c) => {
       // Same lock as claims: a pause returning successfully fences subsequent dispatch.
       await c.query("SELECT pg_advisory_xact_lock(hashtext('conduit-claim'))");

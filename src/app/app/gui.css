@@ -1060,3 +1060,37 @@ body:has(.console) {
   padding: var(--space-3) 0;
   color: var(--muted);
 }
+.console .owner-actions {
+  padding: var(--space-4);
+  margin-block: var(--space-4);
+  background: var(--surface);
+  border: var(--line) solid var(--border);
+  border-radius: var(--radius-8);
+}
+.console .owner-actions form,
+.console .owner-actions label {
+  display: grid;
+  gap: var(--space-2);
+  margin-block: var(--space-2);
+}
+.console .owner-actions input,
+.console .owner-actions textarea,
+.console .owner-actions select {
+  width: 100%;
+  padding: var(--space-2);
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--line) solid var(--border-strong);
+  border-radius: var(--radius-4);
+  font: inherit;
+}
+.console .owner-actions button {
+  margin: var(--space-2);
+}
+.console .owner-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.console .owner-actions [role="alert"] {
+  color: var(--failed);
+}

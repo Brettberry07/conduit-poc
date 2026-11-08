@@ -5,7 +5,7 @@ import { developmentApi } from "./development-api";
 import { agentManifest } from "./agent-protocol";
 import { DEVELOPMENT_BODY_LIMIT } from "./research";
 import { DevelopmentError } from "./development";
-import { requiredScope } from "./keys";
+import { allowedScopes } from "./keys";
 import { authenticateConsole } from "./auth";
 import { z } from "zod";
 import type { DB } from "./db";
@@ -118,9 +118,12 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     );
     if (key === "unlinked") return json({ error: "account not linked" }, 403);
     if (!key) return json({ error: "Unauthorized" }, 401);
-    const scope = requiredScope(path, method);
-    if (!scope) return json({ error: "Not found" }, 404);
-    if (!key.scopes.includes(scope)) return json({ error: "Forbidden" }, 403);
+    const scopes = allowedScopes(path, method);
+    if (!scopes.length) return json({ error: "Not found" }, 404);
+    if (!scopes.some((scope) => key.scopes.includes(scope)))
+      return json({ error: "Forbidden" }, 403);
+    if (method === "GET" && path === "/api/console/identity")
+      return json({ scopes: key.scopes });
     if (monitor) {
       if (key.role !== "submitter") return json({ error: "Forbidden" }, 403);
       return json(await monitorSnapshot(db, key.principal, url.searchParams));

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { info } from "../src/lib/info";
-import { SCOPES, credentialScopes, requiredScope } from "../src/lib/keys";
+import { SCOPES, credentialScopes, allowedScopes } from "../src/lib/keys";
 
 test("public info describes implemented capabilities without runtime details", async () => {
   const response = info(new Request("https://example.test/info"));
@@ -74,7 +74,7 @@ test("public info describes implemented capabilities without runtime details", a
     assert.equal(typeof entry.required_access, "string");
     assert.ok(entry.required_access.length > 0);
     const [method, path] = entry.endpoint.split(" ");
-    const scope = requiredScope(path, method);
+    const scope = allowedScopes(path, method)[0];
     if (scope)
       assert.equal(
         entry.required_access,
