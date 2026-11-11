@@ -161,7 +161,7 @@ Conduit is an engineering prototype with explicit operator responsibilities:
 - **Private configuration.** Submitter/worker keys are scoped and revocable; the database stores their hashes. Runtime, key-management and schema-administrator access are separate. Keep environment files, keys, journals and private project configuration out of commits and shared logs.
 - **Human control.** No automatic merge, draft-to-ready transition, deployment or destructive worktree cleanup. Review repository protections and connected deployment triggers before merging.
 
-The read-only web console supports API keys and Supabase Auth email/password accounts with explicit administrator workspace mappings. Hosted readiness, external Instinct acceptance and live Codex/GitHub verification must be established for each installation; historical results are not current guarantees.
+The web console remains read-only for standard keys. Retry, request revision, initiative pause/resume/cancel, and job creation controls appear only for the owner's configured key. Owner controls are hidden by default, as shown in the screenshots and diagram. The console supports API keys and Supabase Auth email/password accounts with explicit administrator workspace mappings. Hosted readiness, external Instinct acceptance and live Codex/GitHub verification must be established for each installation; historical results are not current guarantees.
 
 ## Repository map
 

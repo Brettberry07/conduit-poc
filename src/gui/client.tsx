@@ -41,12 +41,218 @@ export type ConsoleData = {
   updated: number;
   error: string;
   paused: boolean;
+  scopes?: string[];
+  write?: (path: string, method: string, body: unknown) => Promise<void>;
   scope?: string;
   statusFilter?: string;
   setTriage?: (name: string, value: string) => void;
 };
 export const ConsoleContext = createContext<ConsoleData>(null!);
 const Context = ConsoleContext;
+type ConsoleInitiative = { id: string; title: string; status: string };
+export function OwnerActions({
+  scopes,
+  write,
+  job,
+  publication,
+  initiatives = [],
+  projects = [],
+}: {
+  scopes: string[];
+  write?: (path: string, method: string, body: unknown) => Promise<void>;
+  job?: Job;
+  publication?: Detail["publication"];
+  initiatives?: ConsoleInitiative[];
+  projects?: { id: string; name: string }[];
+}) {
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [title, setTitle] = useState("");
+  const [project, setProject] = useState("");
+  const action = scopes.includes("console:action"),
+    create = scopes.includes("console:create");
+  const pr = publication?.pull_request;
+  async function run(path: string, method: string, body: unknown) {
+    if (!write || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await write(path, method, body);
+      setNotice("Request accepted. Dashboard data will refresh.");
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+  if (!action && !create && !error) return null;
+  return (
+    <section className="owner-actions" aria-label="Dashboard actions">
+      {error && <p role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
+      {action && job && (
+        <>
+          {["failed", "blocked"].includes(job.status) && (
+            <button
+              disabled={busy || !write}
+              onClick={() =>
+                void run(`/api/jobs/${job.id}/retry`, "POST", {
+                  expected_attempt_count: job.attempt_count,
+                })
+              }
+            >
+              Retry
+            </button>
+          )}
+          {pr?.state === "open" && pr.draft && !pr.merged && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void run(`/api/jobs/${job.id}/revisions`, "POST", {
+                  instructions,
+                });
+              }}
+            >
+              <label>
+                Revision instructions
+                <textarea
+                  required
+                  maxLength={12000}
+                  value={instructions}
+                  disabled={busy}
+                  onChange={(e) => setInstructions(e.target.value)}
+                />
+              </label>
+              <button disabled={busy || !write || !instructions.trim()}>
+                Request revision
+              </button>
+            </form>
+          )}
+        </>
+      )}
+      {!job &&
+        action &&
+        initiatives
+          .filter((i) => ["active", "paused"].includes(i.status))
+          .map((i) => (
+            <div key={i.id}>
+              <strong>{i.title}</strong>
+              <button
+                disabled={busy || !write}
+                onClick={() =>
+                  void run(`/api/initiatives/${i.id}`, "PATCH", {
+                    expected_status: i.status,
+                    status: i.status === "active" ? "paused" : "active",
+                  })
+                }
+              >
+                {i.status === "active" ? "Pause" : "Resume"}
+              </button>
+              <button
+                disabled={busy || !write}
+                onClick={() => setCancelTarget(i.id)}
+              >
+                Cancel
+              </button>
+              {cancelTarget === i.id && (
+                <div role="group" aria-label={`Cancel ${i.title}?`}>
+                  <p>
+                    Cancel {i.title}? This cancels the initiative and its
+                    remaining work.
+                  </p>
+                  <button
+                    disabled={busy || !write}
+                    onClick={() => {
+                      setCancelTarget(null);
+                      void run(`/api/initiatives/${i.id}`, "PATCH", {
+                        expected_status: i.status,
+                        status: "cancelled",
+                      });
+                    }}
+                  >
+                    Confirm cancellation
+                  </button>
+                  <button disabled={busy} onClick={() => setCancelTarget(null)}>
+                    Keep initiative
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+      {!job && create && (
+        <details className="create-job">
+          <summary>Create job</summary>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run("/api/jobs", "POST", {
+                title,
+                instructions,
+                task: "development",
+                project_id: project,
+              });
+            }}
+          >
+            <label>
+              Project
+              <select
+                required
+                value={project}
+                disabled={busy}
+                onChange={(e) => setProject(e.target.value)}
+              >
+                <option value="">Select project</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Job title
+              <input
+                required
+                maxLength={200}
+                value={title}
+                disabled={busy}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+            <label>
+              Job instructions
+              <textarea
+                required
+                maxLength={12000}
+                value={instructions}
+                disabled={busy}
+                onChange={(e) => setInstructions(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={
+                busy ||
+                !write ||
+                !title.trim() ||
+                !instructions.trim() ||
+                !project
+              }
+            >
+              Create job
+            </button>
+          </form>
+        </details>
+      )}
+    </section>
+  );
+}
 const iconPaths = {
   brand: "M3 12V4h8M3 4l10 8M7 12h6V6",
   board: "M2 3h12v10H2zM6 3v10M10 3v10",
@@ -236,6 +442,92 @@ export function Shell({ children }: { children: React.ReactNode }) {
     [paused, setPaused] = useState(false),
     [collapsed, setCollapsed] = useState(false),
     [palette, setPalette] = useState(false);
+  const [identity, setIdentity] = useState<{ token: string; scopes: string[] }>(
+    { token: "", scopes: [] },
+  );
+  const [initiatives, setInitiatives] = useState<ConsoleInitiative[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [actionVersion, setActionVersion] = useState(0);
+  const scopes = identity.token === key ? identity.scopes : [];
+  useEffect(() => {
+    const controller = new AbortController();
+    setIdentity({ token: "", scopes: [] });
+    setInitiatives([]);
+    setProjects([]);
+    if (key)
+      void (async () => {
+        try {
+          const identity = await read(
+            "/api/console/identity",
+            key,
+            controller.signal,
+          );
+          if (controller.signal.aborted) return;
+          setIdentity({
+            token: key,
+            scopes: Array.isArray(identity.scopes) ? identity.scopes : [],
+          });
+          const [i, p] = await Promise.all([
+            identity.scopes.includes("console:action")
+              ? read("/api/initiatives", key, controller.signal)
+              : { initiatives: [] },
+            identity.scopes.includes("console:create")
+              ? read("/api/projects", key, controller.signal)
+              : { projects: [] },
+          ]);
+          if (!controller.signal.aborted) {
+            setInitiatives(i.initiatives);
+            setProjects(p.projects);
+          }
+        } catch (e) {
+          if (!controller.signal.aborted) setError(message(e));
+        }
+      })();
+    return () => controller.abort();
+  }, [key, read, actionVersion]);
+  const writeInFlight = useRef(false);
+  async function write(path: string, method: string, body: unknown) {
+    if (writeInFlight.current) return;
+    writeInFlight.current = true;
+    try {
+      if (
+        method === "POST" &&
+        (path === "/api/jobs" || path.endsWith("/revisions"))
+      ) {
+        const manifest = await read(
+          "/api/agent/manifest",
+          key,
+          new AbortController().signal,
+        );
+        body = {
+          ...(body as Record<string, unknown>),
+          policy_version: manifest.policy_version,
+        };
+      }
+      const init = {
+        method,
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify(body),
+        credentials: "omit" as const,
+        redirect: "error" as const,
+      };
+      const response = /^cnd_live_/.test(key)
+        ? await fetch(path, init)
+        : await auth.current!.fetch(path, init, key);
+      const data = await response.json();
+      if (!response.ok) {
+        if (response.status === 403) setIdentity({ token: "", scopes: [] });
+        throw Error(`${response.status}: ${data.error ?? "Request failed"}`);
+      }
+      setActionVersion((v) => v + 1);
+    } finally {
+      writeInFlight.current = false;
+    }
+  }
   const pathname = usePathname(),
     router = useRouter(),
     params = useSearchParams();
@@ -414,6 +706,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
         updated,
         error,
         paused,
+        scopes,
+        write,
         scope,
         statusFilter,
         setTriage: updateUrl,
@@ -460,7 +754,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <p className="eyebrow">PINNED</p>
             <span className="pill">
               <Icon name="connection" />{" "}
-              {key ? "Read-only connection" : "Disconnected"}
+              {key
+                ? scopes.includes("console:action") ||
+                  scopes.includes("console:create")
+                  ? "Owner connection"
+                  : "Read-only connection"
+                : "Disconnected"}
             </span>
             <p>
               {workers.filter((w) => w.available && !stale(w, now)).length}{" "}
@@ -621,6 +920,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <button onClick={() => setSelected(null)}>Dismiss</button>
                 </p>
               )}
+              <OwnerActions
+                scopes={scopes}
+                write={write}
+                initiatives={initiatives}
+                projects={projects}
+              />
               {children}
             </>
           )}
@@ -979,7 +1284,14 @@ export function Screen({ view }: { view: string }) {
   return (
     <section className="screen">
       <header>
-        <p className="eyebrow">CONDUIT · READ ONLY</p>
+        <p className="eyebrow">
+          CONDUIT ·{" "}
+          {c.scopes?.some(
+            (scope) => scope === "console:action" || scope === "console:create",
+          )
+            ? "OWNER"
+            : "READ ONLY"}
+        </p>
         <h1>
           {view === "board"
             ? "Job board"
@@ -1307,7 +1619,7 @@ function JobDetail({
   close: () => void;
   read: (path: string, token: string, signal: AbortSignal) => Promise<any>;
 }) {
-  const { details } = useContext(Context);
+  const { details, scopes, write } = useContext(Context);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [events, setEvents] = useState<ActivityEvent[] | null>(null);
   const [activityError, setActivityError] = useState("");
@@ -1369,6 +1681,12 @@ function JobDetail({
       <p className="eyebrow">JOB DETAIL · {job.status}</p>
       <h1>{job.title}</h1>
       <code>{job.id}</code>
+      <OwnerActions
+        scopes={scopes ?? []}
+        write={write}
+        job={job}
+        publication={details[job.id]?.publication ?? detail?.publication}
+      />
       <JobActivity
         events={events}
         error={activityError}

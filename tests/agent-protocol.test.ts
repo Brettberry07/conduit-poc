@@ -8,7 +8,7 @@ import {
 import { developmentInput, revisionInput } from "../src/lib/development";
 import { researchSchema, sourceUrl } from "../src/lib/research";
 import { developmentContext } from "../worker/development/context";
-import { requiredScope, generateKey } from "../src/lib/keys";
+import { allowedScopes, generateKey } from "../src/lib/keys";
 import { handle } from "../src/lib/api";
 import type { DB } from "../src/lib/db";
 
@@ -64,8 +64,8 @@ test("policy hashes all operational content deterministically without runtime se
     manifest,
     /\/Users\/|\/home\/|cnd_live_|github_pat_|postgresql:\/\//,
   );
-  assert.equal(requiredScope("/api/agent/manifest", "GET"), "jobs:read");
-  assert.equal(requiredScope("/api/agent/manifest", "POST"), null);
+  assert.deepEqual(allowedScopes("/api/agent/manifest", "GET"), ["jobs:read"]);
+  assert.deepEqual(allowedScopes("/api/agent/manifest", "POST"), []);
 });
 
 test("manifest authentication and scope enforcement use the existing API boundary", async () => {

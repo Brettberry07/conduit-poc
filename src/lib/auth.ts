@@ -107,6 +107,9 @@ export function jwtVerifier(
   };
 }
 const verifyJwt = jwtVerifier();
+const CONSOLE_ACTION_AUTH_USERS: readonly string[] = [
+  "9b56ae7e-8d6b-44d2-be89-0903e9c6b820",
+];
 export async function authenticateConsole(
   db: DB,
   authorization: string,
@@ -128,7 +131,9 @@ export async function authenticateConsole(
   return mapping
     ? {
         principal: mapping.principal,
-        scopes: ["jobs:read"],
+        scopes: CONSOLE_ACTION_AUTH_USERS.includes(sub)
+          ? ["jobs:read", "console:action", "console:create"]
+          : ["jobs:read"],
         role: "submitter",
         id: sub,
       }

@@ -1,4 +1,4 @@
-import { SCOPES, credentialScopes, requiredScope } from "./keys";
+import { SCOPES, credentialScopes, allowedScopes } from "./keys";
 import { publicPage } from "./public-page";
 
 // All inputs are explicit; describing the service needs no database or environment.
@@ -91,7 +91,7 @@ export function info(request: Request): Response {
       "POST /api/initiatives/{id}/reviews",
     ].map((endpoint) => {
       const [method, path] = endpoint.split(" ");
-      const scope = requiredScope(path, method);
+      const scope = allowedScopes(path, method)[0];
       return {
         endpoint,
         required_access: scope

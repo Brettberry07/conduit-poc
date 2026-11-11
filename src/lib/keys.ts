@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DB } from "./db";
 export const SCOPES = [
+  "console:action",
+  "console:create",
   "jobs:revise",
   "jobs:create",
   "jobs:read",
@@ -41,30 +43,34 @@ export async function authenticate(
   );
   return key ?? null;
 }
-export function requiredScope(path: string, method: string): Scope | null {
+export function allowedScopes(path: string, method: string): Scope[] {
+  if (method === "GET" && path === "/api/console/identity")
+    return ["jobs:read"];
+  if (method === "PATCH" && /^\/api\/initiatives\/[^/]+$/.test(path))
+    return ["jobs:revise", "console:action"];
   if (
     /^\/api\/initiatives(?:\/[^/]+(?:\/(?:plan|activate|resume|reviews))?)?$/.test(
       path,
     )
   ) {
-    if (method === "GET" && !path.endsWith("/activate")) return "jobs:read";
+    if (method === "GET" && !path.endsWith("/activate")) return ["jobs:read"];
     if (
       method === "POST" &&
       (path === "/api/initiatives" || path.endsWith("/activate"))
     )
-      return "jobs:create";
+      return ["jobs:create"];
     if (
       (method === "PATCH" && !/\/(?:activate|resume|reviews)$/.test(path)) ||
       (method === "POST" && path.endsWith("/reviews"))
     )
-      return "jobs:revise";
-    return null;
+      return ["jobs:revise"];
+    return [];
   }
   if (
     method === "POST" &&
     /^\/api\/agent\/event-consumers\/[^/]+\/ack$/.test(path)
   )
-    return "jobs:revise";
+    return ["jobs:revise"];
   if (
     method === "GET" &&
     (path === "/api/agent/manifest" ||
@@ -76,28 +82,29 @@ export function requiredScope(path: string, method: string): Scope | null {
         path,
       ))
   )
-    return "jobs:read";
+    return ["jobs:read"];
   if (method === "POST" && /^\/api\/jobs\/[^/]+\/(revisions|retry)$/.test(path))
-    return "jobs:revise";
+    return ["jobs:revise", "console:action"];
   if (
     method === "POST" &&
     (/^\/api\/jobs\/[^/]+\/(publication|artifacts)$/.test(path) ||
       ["/api/development/pending", "/api/development/reconcile"].includes(path))
   )
-    return "jobs:update";
-  if (method === "POST" && path === "/api/jobs") return "jobs:create";
+    return ["jobs:update"];
+  if (method === "POST" && path === "/api/jobs")
+    return ["jobs:create", "console:create"];
   if (
     method === "GET" &&
     (path === "/api/jobs" ||
       path === "/api/workers" ||
       /^\/api\/jobs\/[^/]+$/.test(path))
   )
-    return "jobs:read";
-  if (method === "POST" && path === "/api/claim") return "jobs:claim";
+    return ["jobs:read"];
+  if (method === "POST" && path === "/api/claim") return ["jobs:claim"];
   if (
     method === "POST" &&
     (path === "/api/heartbeat" || /^\/api\/jobs\/[^/]+\/report$/.test(path))
   )
-    return "jobs:update";
-  return null;
+    return ["jobs:update"];
+  return [];
 }
