@@ -11,7 +11,7 @@ Changed files:
 
 - `src/gui/model.ts`: shared attempt derivation, filters, URL update helper and attention conditions.
 - `src/gui/client.tsx`: narrow context/URL wiring, native scope select, quick filters and reason groups.
-- `src/app/app/gui.css`: wrapping titles and controls using existing tokens.
+- `src/app/app/gui.css`: three-line card titles and controls using existing tokens.
 - `tests/gui.test.ts`, `tests/gui-screens.test.ts`, `tests/gui-triage.test.ts`: model and static-render coverage.
 - `docs/dashboard-triage.md`: decisions, evidence and verification.
 
@@ -73,19 +73,30 @@ Back/Forward; the existing mechanism remains.
   the existing refresh banner warns that review may be incomplete. No invented
   healthy state or cached publication fallback was added.
 
-## Verification (2026-11-11)
+## Same-PR presentation follow-up (2026-11-11)
+
+Card titles now display at most three lines, retaining the complete text node
+and title tooltip. Detail titles and attention links retain natural wrapping.
+Dependency headings show a human-readable reason, PR number when available and
+eight-character ID. The original full reason and UUID remain in both the heading's
+accessible label and title tooltip. Dependency conditions, links and ordering are
+unchanged. Continue this work in the existing draft PR17; no new initiative,
+publication, merge or deployment is needed.
+
+## Verification (2026-11-11, presentation follow-up)
 
 Passed:
 
 - `node node_modules/next/dist/bin/next typegen`.
 - `node node_modules/typescript/bin/tsc --noEmit`.
-- `node scripts/test-offline.cjs`: **77/77 tests, 14 files**.
-- Prettier on changed TypeScript/CSS files.
+- `node scripts/test-offline.cjs`: **79/79 tests, 14 files**.
+- `node node_modules/prettier/bin/prettier.cjs --write src/gui/client.tsx src/gui/model.ts src/app/app/gui.css tests/gui-screens.test.ts`.
 
-The configured npm wrapper could not locate npm in the provided toolchain.
-The typecheck and offline scripts above were run directly with Node instead.
-The first offline run exposed an old test expecting imperative “Merge PR” copy;
-the assertion now checks the read-only dependency-review wording.
+These commands were run directly with Node for this follow-up. All passed.
+New focused coverage checks the card-only three-line CSS rule, full title markup,
+and compact dependency headings with full accessible evidence for open, closed,
+merged and unavailable publication states. Static tests do not establish rendered
+height or actual screen-reader behavior; PM will repeat pixel review.
 
 Coverage includes shuffled revisions, self/null roots, unrelated identical
 titles, invalid/tied dates, unknown statuses, scope/filter/search counts,
@@ -109,10 +120,10 @@ Suggested draft title: **Improve dashboard triage and loaded attempt history**
 Draft description: Default board and Needs you to the latest loaded attempt per
 explicit root, with All attempts history, URL-restorable quick filters and grouped
 read-only attention reasons. Preserve raw job detail selection, existing design
-tokens and worker monitoring; wrap long titles. Review remains publication
+tokens and worker monitoring; bound card titles to three lines. Review remains publication
 evidence, never merge approval.
 
 Validation: Next type generation and TypeScript pass; supported offline suite
-passes 77/77 across 14 files. Browser/mobile and environment-dependent integration
+passes 79/79 across 14 files. Browser/mobile and environment-dependent integration
 checks remain for PM. This worker did not commit, push, create a PR, merge or
 deploy: Conduit manages commits and publication. Publish as **draft only**.

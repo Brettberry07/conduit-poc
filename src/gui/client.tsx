@@ -1203,7 +1203,12 @@ export function Screen({ view }: { view: string }) {
                           status={n.severity === 2 ? "review" : n.job.status}
                         />
                       )}
-                      <h2>{n.why}</h2>
+                      <h2
+                        title={n.heading ? n.why : undefined}
+                        aria-label={n.heading ? n.why : undefined}
+                      >
+                        {n.heading ?? n.why}
+                      </h2>
                       {n.job && (
                         <p>
                           <button

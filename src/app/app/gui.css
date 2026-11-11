@@ -930,8 +930,13 @@ body:has(.console) {
   gap: var(--space-2);
 }
 
-/* Detail surfaces keep evidence readable at desktop and phone widths. */
+/* Bound card height while preserving the full title in text and detail. */
 .console .job h3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
   white-space: normal;
   overflow-wrap: anywhere;
 }

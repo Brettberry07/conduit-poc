@@ -206,6 +206,7 @@ export type Need = {
   severity: number;
   group: (typeof needGroups)[number];
   why: string;
+  heading?: string;
   date: string;
   url?: string;
   command?: string;
@@ -295,13 +296,19 @@ export function needsYou(
             dep.state === "open"
               ? `Dependency ${id}: review PR #${dep.number}; merge is required upstream`
               : `Dependency ${id}: PR #${dep.number} closed and unmerged`,
-            { url: githubUrl(dep.url) },
+            {
+              url: githubUrl(dep.url),
+              heading: `Dependency ${dep.state === "open" ? "review" : "closed and unmerged"} · PR #${dep.number} · ${id.slice(0, 8)}`,
+            },
           );
         } else {
           add(
             id,
             1,
             `Waiting on dependency ${id}; ${dep?.merged ? "PR reported merged, job still waiting" : "publication evidence unavailable"}`,
+            {
+              heading: `Dependency ${dep?.merged ? `merged; still waiting · PR #${dep.number}` : "evidence unavailable"} · ${id.slice(0, 8)}`,
+            },
           );
         }
         dependencies.set(id, items[items.length - 1]);

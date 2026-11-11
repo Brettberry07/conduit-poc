@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ConsoleContext, Screen, type ConsoleData } from "../src/gui/client";
@@ -244,4 +245,58 @@ test("long and unknown titles remain full accessible text and partial reads reta
     }),
     /Draft PR #42/,
   );
+});
+
+test("only card titles are clamped to three lines", () => {
+  const css = readFileSync("src/app/app/gui.css", "utf8");
+  const clampRules = css.match(/[^{}]+\{[^{}]*line-clamp[^{}]*\}/g) ?? [];
+  assert.equal(clampRules.length, 1);
+  assert.match(clampRules[0], /\.console \.job h3\s*\{/);
+  assert.match(clampRules[0], /-webkit-line-clamp: 3;/);
+  assert.match(clampRules[0], /overflow: hidden;/);
+});
+
+test("dependency headings show reason, PR and short ID with full accessible evidence", () => {
+  const id = data.jobs[2].id;
+  const title = "Full naturally wrapping attention link ".repeat(12);
+  const jobs = [
+    {
+      ...data.jobs[0],
+      title,
+      status: "waiting_dependencies",
+      dependency_job_ids: [id],
+    },
+  ];
+  for (const state of ["open", "closed", "merged", "missing"]) {
+    const details = structuredClone(data.details);
+    const pr = details[id].publication!.pull_request!;
+    pr.state = state === "open" ? "open" : "closed";
+    pr.merged = state === "merged";
+    const html = render("needs-you", {
+      jobs,
+      details: state === "missing" ? {} : details,
+    });
+    const heading = html.match(
+      /<h2 title="([^"]+)" aria-label="([^"]+)">([^<]+)<\/h2>/,
+    );
+    assert.ok(heading);
+    assert.ok(heading[1].includes(id));
+    assert.equal(heading[1], heading[2]);
+    assert.ok(heading[3].includes(id.slice(0, 8)));
+    assert.ok(!heading[3].includes(id));
+    assert.ok(
+      heading[3].includes(
+        state === "open"
+          ? "review"
+          : state === "closed"
+            ? "closed and unmerged"
+            : state === "merged"
+              ? "merged; still waiting"
+              : "evidence unavailable",
+      ),
+    );
+    assert.equal(heading[3].includes("PR #42"), state !== "missing");
+    assert.ok(html.includes(title));
+    assert.ok(html.includes('class="need-job"'));
+  }
 });
