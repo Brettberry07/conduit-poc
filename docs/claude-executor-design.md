@@ -1,6 +1,6 @@
 # Claude executor compatibility design
 
-Status: proposal, docs only, revised 2026-11-08 (evidence-reconciled revision; supersedes the 2026-11-07 draft). No behavior or dependency changes. Brett wants staged Claude support using his own subscription; he currently has no subscription available for testing. No API usage, purchase, signup or live model call is authorized. Credential, architecture and server changes require his explicit approval first.
+Status: proposal, docs only, revised 2026-11-11 (narrow configuration-discovery and subscription-transport evidence correction; prior evidence reconciled 2026-11-08). No behavior or dependency changes. Brett wants staged Claude support using his own subscription; he currently has no subscription available for testing. No API usage, purchase, signup or live model call is authorized. Credential, architecture and server changes require his explicit approval first.
 
 ## How to read the evidence labels
 
@@ -60,7 +60,7 @@ Current development explicitly requires macOS and Node 24. `developmentSandboxCo
 An earlier sketch proposed wrapping the whole Claude process in the existing network-disabled Seatbelt profile. **Rejected**: the Claude Code process itself makes the model API calls; a network-dead outer profile breaks transport. The correct separation is architectural:
 
 1. The **process** holds the subscription login and makes API calls. Tool children (shell commands) never hold transport credentials: the inner sandbox gives children `network.allowedDomains: []` plus env scrubbing, so even a malicious or confused shell command has no network and no tokens.
-2. The **outer whole-process boundary** is the documented direction for covering file tools: [PROVIDER, sandboxing] "To put the tools, processes, and commands in this section behind one boundary, run the Claude Code process itself in a container, virtual machine, or the sandbox runtime." The sandbox is built on the open-source `@anthropic-ai/sandbox-runtime` package. The outer policy would allow domain access limited to Anthropic API endpoints only, with filesystem denies covering controller/storage/credential paths for the whole process tree - giving OS enforcement over Read/Edit/Write, which app-level rules cannot guarantee (2.1).
+2. The **outer whole-process boundary** is the documented direction for covering file tools: [PROVIDER, sandboxing] "To put the tools, processes, and commands in this section behind one boundary, run the Claude Code process itself in a container, virtual machine, or the sandbox runtime." The sandbox is built on the open-source `@anthropic-ai/sandbox-runtime` package. The proposed outer policy must distinguish model transport from subscription authentication and refresh. [PROVIDER, sandbox environments, fetched 2026-11-11] https://code.claude.com/docs/en/sandbox-environments lists `api.anthropic.com` for model access and additionally `claude.ai` and `platform.claude.com` for OAuth sign-in and refresh. These are documented requirements, not a verified sufficient allowlist for this worker. [INTERPRETATION, PROVISIONAL] An API-endpoint-only allowlist is therefore incomplete for the proposed subscription lifecycle. Any eventual domain policy remains subject to owner approval and pinned-version host proof, with filesystem denies covering controller/storage/credential paths for the whole process tree - giving OS enforcement over Read/Edit/Write, which app-level rules cannot guarantee (2.1).
 3. **Process-level web tools** (WebFetch/WebSearch) run in-process and outside any shell sandbox: exclude them from the enumerated allowed tool set entirely (deterministic absence, not a deny rule).
 
 **Proof gates - all UNVERIFIED, none assumed:**
@@ -143,7 +143,9 @@ Proposed slices, not enqueued jobs or authorization:
 - **D3 - Brett, security:** File tools outside the OS sandbox are now documented best-effort at app level [PROVIDER]. The compensating outer whole-process boundary is PROVISIONAL pending G1/G2. Decision: accept the documented app-level boundary, require the outer boundary, or require stronger isolation - after host evidence exists.
 - **D4 - RESOLVED as design direction [PROVIDER-backed, PROVISIONAL]:** single persistent isolated `CLAUDE_CONFIG_DIR`; no per-attempt create/logout; no copying. Remaining unknowns are G3/G4 host behavior, not design choices.
 - **D5 - Brett, routing/server:** Approve development selector, capability-aware claims and associated migration/rollout? Recommended, not approved.
-- **D6 - RESOLVED [PROVIDER]:** documented discovery controls exist: `settingSources: []` and `strictMcpConfig` (Agent SDK reference); `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` ("prevent loading any CLAUDE.md memory files into context, including user, project, and auto memory files") and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` / `autoMemoryEnabled` (env vars); hooks/plugins/skills/agents all load via settings sources and are covered by `[]`. Belt-and-suspenders: controlled worktree parent chain. Demonstration on the pinned version remains part of Tier 2.
+- **D6 - PARTIALLY SPECIFIED, NOT PROVEN ISOLATED:** [PROVIDER, fetched 2026-11-11] https://code.claude.com/docs/en/agent-sdk/claude-code-features says `settingSources: []` excludes user/project/local filesystem settings, but is not a universal ambient-input boundary. Its documented exceptions include endpoint-managed policy and eligible server-managed settings; global `~/.claude.json` config (relocated with `CLAUDE_CONFIG_DIR`); auto memory unless separately disabled; account MCP connectors unless separately restricted; and restrictive credential-protection entries that can still apply. Empty `mcpServers: {}` alone does not suppress account connectors; `strictMcpConfig: true` is a separate documented control. The TypeScript reference also documents this control: https://code.claude.com/docs/en/agent-sdk/typescript .
+  - [INTERPRETATION] Keep explicit filesystem settings sources, a controlled config directory and worktree parent chain, separate auto-memory controls, and strict MCP configuration in the proposed test matrix. Do not remove mandatory policy or restrictive credential protection to make a test pass. Inventory effective host policy without reading credential values. Managed/global inputs must not be described as neutralized merely because `settingSources` is empty.
+  - UNVERIFIED: exact effective inputs, precedence and tool surface on the pinned SDK/binary and worker host. Tier 2 must demonstrate them; no SDK/host experiment was performed for this documentation correction.
 - **D7 - Brett:** Subscription availability and live-test authorization/scope. Deferred; none supplied.
 
 ### Proof-gate register (consolidated UNVERIFIED list)
@@ -152,7 +154,8 @@ Proposed slices, not enqueued jobs or authorization:
 - G2 tool-child access to parent transport credentials/network through the outer boundary; outer policy allows binary auth while excluding untrusted file-tool access.
 - G3 shared config-dir concurrency under parallel attempts.
 - G4 Keychain vs file credential behavior under custom `CLAUDE_CONFIG_DIR` on the worker.
-- Live auth/refresh/transport/eligibility (Tier 3) - blocked on subscription + authorization.
+- G5 ambient configuration and discovery: effective managed/global inputs, memory and connector controls on the pinned SDK/worker, without removing mandatory policies.
+- Live auth/refresh/transport/eligibility (Tier 3), including separately documented OAuth refresh domains - blocked on subscription + authorization.
 
 ## Appendix A - provider clarification draft (internal proposal, NOT sent)
 
@@ -165,3 +168,8 @@ To be sent only through a channel Brett explicitly approves, to Anthropic (the d
 - PM review `f2ef7c98-d3eb-4f81-8826-d084a44f8db3` (2026-11-08) assessed the ORIGINAL 2026-11-07 memo as a problem map: ready_for_human_review on that basis, while noting its configuration answers needed evidence reconciliation.
 - This revised memo is that reconciliation. PM review of the REVISED memo is pending and remains an acceptance requirement; the author must not label this memo PM-approved.
 - PM checklist for the revised review: all seven sections; evidence labels and dates present; per-attempt credential model removed; network-dead outer wrap removed; proof gates G1-G4 explicit; three verification tiers separated; Appendix A present and marked not sent; no code/config/dependency changes; no live-compatibility claims.
+
+
+## 2026-11-11 narrow review update
+
+Two documentation issues were corrected from newly fetched official pages: D6 no longer claims ambient discovery isolation is resolved, and the proposed subscription transport policy now distinguishes model access from OAuth sign-in/refresh domains. This is a proposal correction only: no network/configuration, credential, runtime, dependency, migration, merge or deployment change. The original staged initiative remains paused and the separate scanner-quarantined contract work remains untouched. No fresh host or live compatibility evidence is claimed. A fresh PM assessment records the exact reviewed commit separately.
