@@ -91,12 +91,12 @@ test("needs-you is evidence-based, ordered and read-only", () => {
         i.command === "npm run development:admin -- inspect --job-id recover",
     ),
   );
-  assert.ok(items.some((i) => i.why.includes("Merge PR #7")));
+  assert.ok(items.some((i) => i.why.includes("review PR #7")));
   assert.ok(items.some((i) => i.why.includes("Build failed")));
   assert.deepEqual(needsYou([job()], [], {}), []);
   details.dep.publication!.pull_request!.merged = true;
   assert.ok(
-    !needsYou(jobs, [], details).some((i) => i.why.includes("Merge PR")),
+    !needsYou(jobs, [], details).some((i) => i.why.includes("review PR")),
   );
 });
 test("draft review is deduplicated by root and offline workers require queue", () => {

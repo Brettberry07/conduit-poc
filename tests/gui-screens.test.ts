@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ConsoleContext, Screen, type ConsoleData } from "../src/gui/client";
@@ -152,4 +153,150 @@ test("progress is shown only for running jobs", () => {
     }),
     /<progress/,
   );
+});
+
+test("triage scope and composed quick filters render accessible counts and older history", () => {
+  const old = { ...data.jobs[3], id: "old", title: "Older failure" };
+  const latest = {
+    ...old,
+    id: "latest",
+    root_job_id: "old",
+    title: "Latest success",
+    status: "completed",
+    created_at: "2026-11-08T00:00:00Z",
+  };
+  const changes = { jobs: [old, latest], workers: [], details: {} };
+  const board = render("board", changes);
+  assert.doesNotMatch(board, /<h3[^>]*>Older failure/);
+  assert.match(board, /1 hidden by scope/);
+  assert.match(board, /not global history/);
+  assert.match(board, /aria-pressed="true"[^>]*>All \(1\)/);
+  assert.match(
+    render("board", { ...changes, scope: "all" }),
+    /<h3[^>]*>Older failure/,
+  );
+  assert.match(
+    render("board", {
+      ...changes,
+      scope: "all",
+      statusFilter: "failed",
+      search: "Older",
+    }),
+    /<h3[^>]*>Older failure/,
+  );
+  assert.doesNotMatch(
+    render("board", {
+      ...changes,
+      scope: "all",
+      statusFilter: "failed",
+      search: "Latest",
+    }),
+    /<h3/,
+  );
+  assert.match(
+    render("board", { ...changes, statusFilter: "nonsense" }),
+    /aria-pressed="true"[^>]*>All/,
+  );
+  assert.doesNotMatch(render("needs-you", changes), /Older failure/);
+  assert.match(
+    render("needs-you", { ...changes, scope: "all" }),
+    /Recovery \/ failure/,
+  );
+});
+test("review requires open published evidence and reason groups count conditions", () => {
+  const html = render("needs-you");
+  assert.match(html, /aria-label="Recovery \/ failure"/);
+  assert.match(html, /aria-label="Review"/);
+  assert.match(html, /not merge approval/);
+  const details = structuredClone(data.details);
+  Object.values(details)[0].publication!.pull_request!.merged = true;
+  assert.doesNotMatch(
+    render("board", { statusFilter: "review", details }),
+    /<h3/,
+  );
+  assert.match(
+    render("board", { statusFilter: "review", search: "worker" }),
+    /Improve worker recovery/,
+  );
+  assert.doesNotMatch(
+    render("board", { statusFilter: "review", search: "release" }),
+    /<h3/,
+  );
+});
+test("long and unknown titles remain full accessible text and partial reads retain failure evidence", () => {
+  const title = "A very long dashboard title ".repeat(20) + "end";
+  const html = render("board", {
+    jobs: [{ ...data.jobs[0], title, status: "future_status" }],
+  });
+  assert.ok(html.includes('title="' + title + '"'));
+  assert.ok(html.includes(">" + title + "</h3>"));
+  assert.match(html, /Unknown status/);
+  assert.match(html, /future status/);
+  assert.match(
+    render("needs-you", {
+      error: "Some job details could not be refreshed",
+      details: { [data.jobs[2].id]: { errors: ["publication failed"] } },
+    }),
+    /Release check failed/,
+  );
+  assert.doesNotMatch(
+    render("needs-you", {
+      details: { [data.jobs[2].id]: { errors: ["publication failed"] } },
+    }),
+    /Draft PR #42/,
+  );
+});
+
+test("only card titles are clamped to three lines", () => {
+  const css = readFileSync("src/app/app/gui.css", "utf8");
+  const clampRules = css.match(/[^{}]+\{[^{}]*line-clamp[^{}]*\}/g) ?? [];
+  assert.equal(clampRules.length, 1);
+  assert.match(clampRules[0], /\.console \.job h3\s*\{/);
+  assert.match(clampRules[0], /-webkit-line-clamp: 3;/);
+  assert.match(clampRules[0], /overflow: hidden;/);
+});
+
+test("dependency headings show reason, PR and short ID with full accessible evidence", () => {
+  const id = data.jobs[2].id;
+  const title = "Full naturally wrapping attention link ".repeat(12);
+  const jobs = [
+    {
+      ...data.jobs[0],
+      title,
+      status: "waiting_dependencies",
+      dependency_job_ids: [id],
+    },
+  ];
+  for (const state of ["open", "closed", "merged", "missing"]) {
+    const details = structuredClone(data.details);
+    const pr = details[id].publication!.pull_request!;
+    pr.state = state === "open" ? "open" : "closed";
+    pr.merged = state === "merged";
+    const html = render("needs-you", {
+      jobs,
+      details: state === "missing" ? {} : details,
+    });
+    const heading = html.match(
+      /<h2 title="([^"]+)" aria-label="([^"]+)">([^<]+)<\/h2>/,
+    );
+    assert.ok(heading);
+    assert.ok(heading[1].includes(id));
+    assert.equal(heading[1], heading[2]);
+    assert.ok(heading[3].includes(id.slice(0, 8)));
+    assert.ok(!heading[3].includes(id));
+    assert.ok(
+      heading[3].includes(
+        state === "open"
+          ? "review"
+          : state === "closed"
+            ? "closed and unmerged"
+            : state === "merged"
+              ? "merged; still waiting"
+              : "evidence unavailable",
+      ),
+    );
+    assert.equal(heading[3].includes("PR #42"), state !== "missing");
+    assert.ok(html.includes(title));
+    assert.ok(html.includes('class="need-job"'));
+  }
 });
