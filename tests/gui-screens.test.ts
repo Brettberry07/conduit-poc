@@ -153,3 +153,95 @@ test("progress is shown only for running jobs", () => {
     /<progress/,
   );
 });
+
+test("triage scope and composed quick filters render accessible counts and older history", () => {
+  const old = { ...data.jobs[3], id: "old", title: "Older failure" };
+  const latest = {
+    ...old,
+    id: "latest",
+    root_job_id: "old",
+    title: "Latest success",
+    status: "completed",
+    created_at: "2026-11-08T00:00:00Z",
+  };
+  const changes = { jobs: [old, latest], workers: [], details: {} };
+  const board = render("board", changes);
+  assert.doesNotMatch(board, /<h3[^>]*>Older failure/);
+  assert.match(board, /1 hidden by scope/);
+  assert.match(board, /not global history/);
+  assert.match(board, /aria-pressed="true"[^>]*>All \(1\)/);
+  assert.match(
+    render("board", { ...changes, scope: "all" }),
+    /<h3[^>]*>Older failure/,
+  );
+  assert.match(
+    render("board", {
+      ...changes,
+      scope: "all",
+      statusFilter: "failed",
+      search: "Older",
+    }),
+    /<h3[^>]*>Older failure/,
+  );
+  assert.doesNotMatch(
+    render("board", {
+      ...changes,
+      scope: "all",
+      statusFilter: "failed",
+      search: "Latest",
+    }),
+    /<h3/,
+  );
+  assert.match(
+    render("board", { ...changes, statusFilter: "nonsense" }),
+    /aria-pressed="true"[^>]*>All/,
+  );
+  assert.doesNotMatch(render("needs-you", changes), /Older failure/);
+  assert.match(
+    render("needs-you", { ...changes, scope: "all" }),
+    /Recovery \/ failure/,
+  );
+});
+test("review requires open published evidence and reason groups count conditions", () => {
+  const html = render("needs-you");
+  assert.match(html, /aria-label="Recovery \/ failure"/);
+  assert.match(html, /aria-label="Review"/);
+  assert.match(html, /not merge approval/);
+  const details = structuredClone(data.details);
+  Object.values(details)[0].publication!.pull_request!.merged = true;
+  assert.doesNotMatch(
+    render("board", { statusFilter: "review", details }),
+    /<h3/,
+  );
+  assert.match(
+    render("board", { statusFilter: "review", search: "worker" }),
+    /Improve worker recovery/,
+  );
+  assert.doesNotMatch(
+    render("board", { statusFilter: "review", search: "release" }),
+    /<h3/,
+  );
+});
+test("long and unknown titles remain full accessible text and partial reads retain failure evidence", () => {
+  const title = "A very long dashboard title ".repeat(20) + "end";
+  const html = render("board", {
+    jobs: [{ ...data.jobs[0], title, status: "future_status" }],
+  });
+  assert.ok(html.includes('title="' + title + '"'));
+  assert.ok(html.includes(">" + title + "</h3>"));
+  assert.match(html, /Unknown status/);
+  assert.match(html, /future status/);
+  assert.match(
+    render("needs-you", {
+      error: "Some job details could not be refreshed",
+      details: { [data.jobs[2].id]: { errors: ["publication failed"] } },
+    }),
+    /Release check failed/,
+  );
+  assert.doesNotMatch(
+    render("needs-you", {
+      details: { [data.jobs[2].id]: { errors: ["publication failed"] } },
+    }),
+    /Draft PR #42/,
+  );
+});

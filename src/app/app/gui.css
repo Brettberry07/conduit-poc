@@ -932,9 +932,35 @@ body:has(.console) {
 
 /* Detail surfaces keep evidence readable at desktop and phone widths. */
 .console .job h3 {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.console .triage-controls select {
+  max-width: 100%;
+  min-height: var(--space-11);
+  color: var(--ink);
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-12);
+  font: inherit;
+}
+.console .triage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-block: var(--space-4);
+}
+.console .triage-filters [aria-pressed="true"] {
+  color: var(--accent);
+  border-color: currentColor;
+  font-weight: 600;
+}
+.console .needs > section {
+  min-width: 0;
+}
+.console .need,
+.console .need-job {
+  overflow-wrap: anywhere;
 }
 .console .sheet > h1 {
   white-space: normal;

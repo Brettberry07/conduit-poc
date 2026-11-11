@@ -16,6 +16,13 @@ import {
   columns,
   githubUrl,
   needsYou,
+  deriveTriage,
+  filterTriage,
+  triageFilter,
+  triageFilters,
+  hasOpenReview,
+  needGroups,
+  dashboardUrl,
   stale,
   type Job,
   type Worker,
@@ -34,6 +41,9 @@ export type ConsoleData = {
   updated: number;
   error: string;
   paused: boolean;
+  scope?: string;
+  statusFilter?: string;
+  setTriage?: (name: string, value: string) => void;
 };
 export const ConsoleContext = createContext<ConsoleData>(null!);
 const Context = ConsoleContext;
@@ -230,12 +240,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
     router = useRouter(),
     params = useSearchParams();
   const search = params.get("filter") ?? "";
+  const scope = params.get("attempts") === "all" ? "all" : "latest";
+  const statusFilter = triageFilter(params.get("status"));
   const selected = jobs.find((j) => j.id === params.get("job")) ?? null;
   function updateUrl(name: string, value: string) {
-    const url = new URL(window.location.href);
-    if (value) url.searchParams.set(name, value);
-    else url.searchParams.delete(name);
-    window.history.pushState(null, "", url);
+    window.history.pushState(
+      null,
+      "",
+      dashboardUrl(window.location.href, name, value),
+    );
   }
   const setSearch = (value: string) => updateUrl("filter", value);
   const setSelected = (job: Job | null) => updateUrl("job", job?.id ?? "");
@@ -380,9 +393,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
     setUpdated(0);
     setError("");
   };
-  const needs = needsYou(jobs, workers, details, now),
+  const triage = deriveTriage(jobs, scope);
+  const needs = needsYou(jobs, workers, details, now, scope),
     counts = [
-      jobs.length,
+      triage.jobs.length,
       jobs.filter((j) => j.status === "running").length,
       needs.length,
     ];
@@ -400,6 +414,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
         updated,
         error,
         paused,
+        scope,
+        statusFilter,
+        setTriage: updateUrl,
       }}
     >
       <div className={`console ${collapsed ? "collapsed" : ""}`}>
@@ -709,17 +726,13 @@ function StatusBadge({ status }: { status: string }) {
 }
 function JobCard({ job }: { job: Job }) {
   const c = useContext(Context);
-  const pr = c.details[job.id]?.publication?.pull_request;
-  const review =
-    job.status === "completed" &&
-    pr?.state === "open" &&
-    pr.draft &&
-    !pr.merged;
+  const review = hasOpenReview(c.details[job.id]);
   return (
     <article className="job">
       <button className="job-open" onClick={() => c.select(job)}>
         <h3 title={job.title}>{job.title}</h3>
-        <StatusBadge status={review ? "review" : job.status} />
+        <StatusBadge status={job.status} />
+        {review && <StatusBadge status="review" />}
         <span className="job-meta">
           <code>{job.id.slice(0, 8)}</code>
           <RelativeTime value={job.created_at} />
@@ -958,7 +971,10 @@ function EmptyState({ title, text }: { title: string; text: string }) {
 }
 export function Screen({ view }: { view: string }) {
   const c = useContext(Context),
-    needs = needsYou(c.jobs, c.workers, c.details, c.now);
+    needs = needsYou(c.jobs, c.workers, c.details, c.now, c.scope);
+  const triage = deriveTriage(c.jobs, c.scope);
+  const status = triageFilter(c.statusFilter);
+  const visible = filterTriage(triage.jobs, c.details, status, c.search);
   const showSkeleton = useDelayedLoading(c.loading && !c.updated && !c.paused);
   return (
     <section className="screen">
@@ -979,6 +995,28 @@ export function Screen({ view }: { view: string }) {
               : "Decisions and recovery signals from reported data. No actions run here."}
         </p>
       </header>
+      {view !== "active" && c.updated > 0 && (
+        <div className="triage-controls">
+          <label>
+            Attempt scope{" "}
+            <select
+              value={c.scope === "all" ? "all" : "latest"}
+              onChange={(e) =>
+                c.setTriage?.("attempts", e.target.value === "all" ? "all" : "")
+              }
+            >
+              <option value="latest">Latest loaded attempt per root</option>
+              <option value="all">All attempts</option>
+            </select>
+          </label>
+          <p className="muted">
+            {triage.jobs.length} of {c.jobs.length} loaded attempts ·{" "}
+            {c.scope === "all" ? 0 : triage.hidden} hidden by scope. Latest
+            means within the loaded window (up to 100 jobs), not global history.
+            {c.scope === "all" && ` ${triage.hidden} older attempts included.`}
+          </p>
+        </div>
+      )}
       {!c.updated || (showSkeleton && !c.error && !c.paused) ? (
         <div className="initial-state" aria-busy={c.loading && !c.paused}>
           {c.paused ? (
@@ -1016,25 +1054,38 @@ export function Screen({ view }: { view: string }) {
               onChange={(e) => c.setSearch(e.target.value)}
             />
           </label>
+          <div
+            className="triage-filters"
+            role="group"
+            aria-label="Job status filters"
+          >
+            {Object.entries(triageFilters).map(([key, label]) => (
+              <button
+                key={key}
+                aria-pressed={status === key}
+                onClick={() =>
+                  c.setTriage?.("status", key === "all" ? "" : key)
+                }
+              >
+                {label} (
+                {filterTriage(triage.jobs, c.details, triageFilter(key)).length}
+                )
+              </button>
+            ))}
+          </div>
           <p className="muted">
-            Latest {c.jobs.length} jobs (up to 100). Counts and review signals
-            cover this window.
+            Review uses reported open, unmerged PR evidence; it is not merge
+            approval.
           </p>
           <div className="board">
             {columns
               .filter(
                 (name) =>
                   name !== "Unknown status" ||
-                  c.jobs.some((j) => column(j.status) === name),
+                  triage.jobs.some((j) => column(j.status) === name),
               )
               .map((name) => {
-                const list = c.jobs.filter(
-                  (j) =>
-                    column(j.status) === name &&
-                    `${j.title} ${j.id} ${j.status}`
-                      .toLowerCase()
-                      .includes(c.search.toLowerCase()),
-                );
+                const list = visible.filter((j) => column(j.status) === name);
                 return (
                   <section className="lane" data-status={name} key={name}>
                     <h2>
@@ -1046,7 +1097,7 @@ export function Screen({ view }: { view: string }) {
                     ))}
                     {!list.length && (
                       <p className="empty">
-                        {c.search
+                        {c.search || status !== "all"
                           ? "No matching jobs"
                           : "No jobs in this stage"}
                       </p>
@@ -1132,33 +1183,64 @@ export function Screen({ view }: { view: string }) {
               }
             />
           )}
-          {needs.map((n) => (
-            <article key={n.id} className={`need severity-${n.severity}`}>
-              {!n.job ? (
-                <span className="status-badge muted">Offline</span>
-              ) : (
-                <StatusBadge
-                  status={n.severity === 2 ? "review" : n.job.status}
-                />
-              )}
-              <h2>{n.why}</h2>
-              {n.job && (
-                <p>
-                  <button className="need-job" onClick={() => c.select(n.job!)}>
-                    {n.job.title} <code>{n.job.id.slice(0, 8)}</code>
-                  </button>
-                </p>
-              )}
-              <p className="muted">{age(n.date, c.now)}</p>
-              <Github url={n.url} />
-              {n.command && (
-                <>
-                  <p>Operator inspection command (copyable text only)</p>
-                  <pre tabIndex={0}>{n.command}</pre>
-                </>
-              )}
-            </article>
-          ))}
+          {needGroups.map((group) => {
+            const items = needs.filter((n) => n.group === group);
+            return (
+              items.length > 0 && (
+                <section key={group} aria-label={group}>
+                  <h2>
+                    {group} <span className="count">{items.length}</span>
+                  </h2>
+                  {items.map((n) => (
+                    <article
+                      key={n.id}
+                      className={`need severity-${n.severity}`}
+                    >
+                      {!n.job ? (
+                        <span className="status-badge muted">Offline</span>
+                      ) : (
+                        <StatusBadge
+                          status={n.severity === 2 ? "review" : n.job.status}
+                        />
+                      )}
+                      <h2>{n.why}</h2>
+                      {n.job && (
+                        <p>
+                          <button
+                            className="need-job"
+                            onClick={() => c.select(n.job!)}
+                          >
+                            {n.job.title} <code>{n.job.id.slice(0, 8)}</code>
+                          </button>
+                        </p>
+                      )}
+                      {n.relatedJobs?.map((job) => (
+                        <p key={job.id}>
+                          Also waiting:{" "}
+                          <button
+                            className="need-job"
+                            onClick={() => c.select(job)}
+                          >
+                            {job.title} <code>{job.id.slice(0, 8)}</code>
+                          </button>
+                        </p>
+                      ))}
+                      <p className="muted">{age(n.date, c.now)}</p>
+                      <Github url={n.url} />
+                      {n.command && (
+                        <>
+                          <p>
+                            Operator inspection command (copyable text only)
+                          </p>
+                          <pre tabIndex={0}>{n.command}</pre>
+                        </>
+                      )}
+                    </article>
+                  ))}
+                </section>
+              )
+            );
+          })}
         </div>
       )}
     </section>
