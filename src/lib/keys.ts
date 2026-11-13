@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DB } from "./db";
 export const SCOPES = [
+  "jobs:wake",
   "console:action",
   "console:create",
   "jobs:revise",
@@ -44,6 +45,7 @@ export async function authenticate(
   return key ?? null;
 }
 export function allowedScopes(path: string, method: string): Scope[] {
+  if (method === "POST" && path === "/api/worker-wake") return ["jobs:wake"];
   if (method === "GET" && path === "/api/console/identity")
     return ["jobs:read"];
   if (method === "PATCH" && /^\/api\/initiatives\/[^/]+$/.test(path))
