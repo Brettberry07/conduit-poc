@@ -63,12 +63,17 @@ END $$;
 REVOKE ALL ON FUNCTION orchestrator.request_worker_wake(text,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION orchestrator.request_worker_wake(text,uuid) TO conduit_api;
 CREATE FUNCTION orchestrator.flush_worker_wake() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
-DECLARE r orchestrator.wake_control;
+DECLARE r orchestrator.wake_control; message_id uuid;
 BEGIN
  SELECT * INTO r FROM orchestrator.wake_control WHERE singleton AND enabled FOR UPDATE SKIP LOCKED;
  IF NOT FOUND OR r.generation=r.delivered OR r.next_attempt>clock_timestamp() THEN RETURN; END IF;
  BEGIN
-  PERFORM realtime.send('{"v":1}'::jsonb,'work_available','conduit:pool:shared',true);
+  message_id := gen_random_uuid();
+  PERFORM realtime.send(jsonb_build_object('v',1,'id',message_id),'work_available','conduit:pool:shared',true);
+  -- Hosted realtime.send catches internal errors as warnings. Check durable insertion.
+  IF NOT EXISTS(SELECT 1 FROM realtime.messages WHERE payload->>'id'=message_id::text AND topic='conduit:pool:shared' AND event='work_available' AND private AND extension='broadcast') THEN
+    RAISE EXCEPTION 'Wake message not inserted';
+  END IF;
   UPDATE orchestrator.wake_control SET delivered=r.generation,failures=0,next_attempt='-infinity' WHERE singleton;
  EXCEPTION WHEN OTHERS THEN
   UPDATE orchestrator.wake_control SET failures=least(failures+1,10),next_attempt=clock_timestamp()+interval '5 minutes' WHERE singleton;
@@ -76,11 +81,8 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION orchestrator.flush_worker_wake() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION orchestrator.flush_worker_wake() TO conduit_api;
--- Scope opt-in, preserving all existing key scope arrays. Review constraints first.
-DO $$ DECLARE c record; BEGIN
- FOR c IN SELECT conname FROM pg_constraint WHERE conrelid='orchestrator.api_keys'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%scopes%' LOOP
- EXECUTE format('ALTER TABLE orchestrator.api_keys DROP CONSTRAINT %I',c.conname); END LOOP;
-END $$;
-ALTER TABLE orchestrator.api_keys ADD CHECK(cardinality(scopes)>0 AND array_position(scopes,NULL) IS NULL AND
+-- Narrowly replace only the audited scope constraint, preserving all existing key scopes.
+ALTER TABLE orchestrator.api_keys DROP CONSTRAINT api_keys_check;
+ALTER TABLE orchestrator.api_keys ADD CONSTRAINT api_keys_check CHECK(cardinality(scopes)>0 AND array_position(scopes,NULL) IS NULL AND
  ((role='submitter' AND scopes <@ ARRAY['jobs:create','jobs:read','jobs:revise','jobs:wake']::text[]) OR
  (role='worker' AND scopes <@ ARRAY['jobs:claim','jobs:update']::text[])));
