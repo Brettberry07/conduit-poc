@@ -16,6 +16,16 @@ test("strict hint contains no command, arbitrary target or task", () => {
   for (const x of [null, {}, { v: 2 }, { v: 1, command: "run" }, "work", []])
     assert.equal(isWakeHint(x), false);
   assert.equal(isWakeHint({ v: 1 }), true);
+  assert.equal(
+    isWakeHint({ v: 1, id: "00000000-0000-4000-8000-000000000001" }),
+    true,
+  );
+  for (const x of [
+    { v: 1, id: "bad" },
+    { v: 1, id: 3 },
+    { v: 1, id: "00000000-0000-4000-8000-000000000001", command: "run" },
+  ])
+    assert.equal(isWakeHint(x), false);
 });
 test("socket heartbeat uses cached token; near expiry refresh deduplicated", async () => {
   let n = 0,
@@ -290,7 +300,10 @@ test("actual private socket adapter joins, rejects injected payloads, catches up
     event({
       topic: "realtime:" + topic,
       event: "broadcast",
-      payload: { event: "work_available", payload: { v: 1 } },
+      payload: {
+        event: "work_available",
+        payload: { v: 1, id: "00000000-0000-4000-8000-000000000001" },
+      },
     });
     assert.equal(hints, 2);
     assert.equal(fatals, 0);
