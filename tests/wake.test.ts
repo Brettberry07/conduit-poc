@@ -471,3 +471,120 @@ test("idle/active heartbeat and report do not flush outbox or add a DB query", a
       true,
     );
 });
+
+test("MissingPartition join retries with cached token; authorization and unknown denials remain fatal", async () => {
+  const { startWakeTransport } = await import("../worker/wake-transport");
+  const dir = await mkdtemp(join(tmpdir(), "wake-readiness-"));
+  const sessionFile = join(dir, "session");
+  await writeFile(
+    sessionFile,
+    JSON.stringify({
+      access_token: "cached",
+      refresh_token: "r",
+      expires_at: Date.now() / 1000 + 3600,
+    }),
+    { mode: 0o600 },
+  );
+  class Socket {
+    static OPEN = 1;
+    static instances: Socket[] = [];
+    readyState = 1;
+    onopen?: () => void;
+    onmessage?: (e: { data: string }) => void;
+    onclose?: () => void;
+    onerror?: () => void;
+    constructor(public url: URL) {
+      Socket.instances.push(this);
+    }
+    send() {}
+    close() {
+      if (this.readyState !== 3) {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+    reply(reason?: unknown) {
+      this.onmessage?.({
+        data: JSON.stringify({
+          topic: "realtime:conduit:pool:shared",
+          event: "phx_reply",
+          payload:
+            reason === undefined
+              ? { status: "ok" }
+              : { status: "error", response: { reason } },
+        }),
+      });
+    }
+  }
+  let hints = 0,
+    fatals = 0,
+    refreshes = 0;
+  const open = () =>
+    startWakeTransport(
+      {
+        url: "https://disposable.supabase.co",
+        publishableKey: "sb_publishable_fake",
+        topic: "conduit:pool:shared",
+        sessionFile,
+      },
+      () => hints++,
+      () => fatals++,
+      {
+        Socket: Socket as unknown as typeof WebSocket,
+        fetcher: async () => {
+          refreshes++;
+          throw Error("unexpected refresh");
+        },
+      },
+    );
+  let t: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    t = await open();
+    await new Promise((r) => setImmediate(r));
+    const first = Socket.instances[0];
+    first.onopen?.();
+    first.reply(
+      "MissingPartition: Realtime was unable to find the expected messages partition",
+    );
+    assert.equal(fatals, 0);
+    assert.equal(hints, 0);
+    assert.equal(first.readyState, 3);
+    const deadline = Date.now() + 4000;
+    while (Socket.instances.length < 2 && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 20));
+    assert.equal(Socket.instances.length, 2);
+    const second = Socket.instances[1];
+    second.onopen?.();
+    second.reply();
+    assert.equal(hints, 1);
+    assert.equal(refreshes, 0);
+    t.close();
+    for (const reason of [
+      "Unauthorized: denied",
+      "InvalidJWTToken: expired",
+      "other MissingPartition: not the known error",
+      "MissingPartition",
+      {},
+      "UnknownServiceError: fail closed",
+    ]) {
+      const before = Socket.instances.length;
+      t = await open();
+      await new Promise((r) => setImmediate(r));
+      Socket.instances.at(-1)!.onopen?.();
+      Socket.instances.at(-1)!.reply(reason);
+      assert.equal(fatals, before - 1);
+      assert.equal(Socket.instances.at(-1)!.readyState, 3);
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(Socket.instances.length, before + 1);
+      t.close();
+    }
+    // No delayed reconnect from any fatal denial after the first retry window.
+    await new Promise((r) => setTimeout(r, 3100));
+    assert.equal(Socket.instances.length, 8);
+    assert.equal(fatals, 6);
+    assert.equal(refreshes, 0);
+  } finally {
+    t?.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
