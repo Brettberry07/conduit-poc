@@ -33,7 +33,12 @@ export function isWakeHint(x: unknown): boolean {
   return (
     !!x &&
     typeof x === "object" &&
-    Object.keys(x).length === 1 &&
+    Object.keys(x).every((k) => k === "v" || k === "id") &&
+    (!("id" in x) ||
+      (typeof (x as { id?: unknown }).id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          (x as { id: string }).id,
+        ))) &&
     (x as { v?: unknown }).v === 1
   );
 }
