@@ -180,3 +180,7 @@ Start with the [documentation index](docs/README.md) for the operator guides, AP
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Optional private worker wake (review before rollout)
+
+The private Supabase wake channel and six-hour idle queue fallback are **off by default**. See [the wake runbook](docs/private-worker-wake.md) for behavior, request budget, isolated verification, protected setup approvals and rollback. The proposed SQL is outside automatic migrations. Do not enable either API or worker flags until the separate auth/policy/schema review and rollout approvals are complete. Active lease and recovery controls are unchanged.
