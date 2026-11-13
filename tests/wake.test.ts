@@ -567,7 +567,7 @@ test("MissingPartition join retries with cached token; authorization and unknown
       {},
       "UnknownServiceError: fail closed",
     ]) {
-      const before = Socket.instances.length;
+      const before: number = Socket.instances.length;
       t = await open();
       await new Promise((r) => setImmediate(r));
       Socket.instances.at(-1)!.onopen?.();
