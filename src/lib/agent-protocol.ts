@@ -44,6 +44,8 @@ export const protocol = {
     job: "GET /api/jobs/{id}",
     retry: "POST /api/jobs/{id}/retry",
     workers: "GET /api/workers",
+    worker_wake:
+      "POST /api/worker-wake (opt-in; explicit jobs:wake scope and caller grant)",
     changes: "GET /api/jobs/{id}/changes",
     diff: "GET /api/jobs/{id}/diff",
     publication: "GET /api/jobs/{id}/publication",
