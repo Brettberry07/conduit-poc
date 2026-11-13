@@ -48,9 +48,9 @@ test(
       await pool.query(`CREATE ROLE anon;CREATE ROLE authenticated;CREATE SCHEMA auth;CREATE SCHEMA realtime;
  CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
  CREATE FUNCTION realtime.topic() RETURNS text LANGUAGE sql STABLE AS $$SELECT current_setting('realtime.topic',true)$$;
- CREATE TABLE realtime.messages(extension text,payload jsonb);ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
+ CREATE TABLE realtime.messages(extension text,payload jsonb,topic text,event text,private boolean);ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
  GRANT USAGE ON SCHEMA realtime,auth TO authenticated;GRANT SELECT ON realtime.messages TO authenticated;
- CREATE FUNCTION realtime.send(payload jsonb,event text,topic text,private boolean) RETURNS void LANGUAGE sql AS $$INSERT INTO realtime.messages VALUES('broadcast',payload)$$;`);
+ CREATE FUNCTION realtime.send(payload jsonb,event text,topic text,private boolean) RETURNS void LANGUAGE plpgsql AS $$BEGIN INSERT INTO realtime.messages VALUES('broadcast',payload || jsonb_build_object('id',coalesce(payload->>'id',gen_random_uuid()::text)),topic,event,private);EXCEPTION WHEN OTHERS THEN RAISE WARNING 'send failed';END$$;`);
       await pool.query(
         await readFile("docs/proposed/private-worker-wake.sql", "utf8"),
       );
@@ -129,7 +129,9 @@ test(
           "0",
         );
         await assert.rejects(
-          c.query(`INSERT INTO realtime.messages VALUES('broadcast','{}')`),
+          c.query(
+            `INSERT INTO realtime.messages(extension,payload) VALUES('broadcast','{}')`,
+          ),
           /permission denied/,
         );
         await assert.rejects(
@@ -251,7 +253,7 @@ test(
         }
         // Delivery failure leaves the same durable generation pending for later recovery.
         await c.query(
-          `CREATE OR REPLACE FUNCTION realtime.send(payload jsonb,event text,topic text,private boolean) RETURNS void LANGUAGE plpgsql AS $$BEGIN RAISE EXCEPTION 'offline';END$$`,
+          `CREATE OR REPLACE FUNCTION realtime.send(payload jsonb,event text,topic text,private boolean) RETURNS void LANGUAGE plpgsql AS $$BEGIN RAISE WARNING 'offline';END$$`,
         );
         await c.query(
           `UPDATE orchestrator.wake_control SET generation=generation+1,next_attempt='-infinity'`,
