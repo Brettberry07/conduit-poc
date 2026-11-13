@@ -65,17 +65,48 @@ try {
         "Worker state belongs to another API origin. Use a separate WORKER_STATE_DIR.",
       );
   }
-  await supervise({
-    call,
-    stateDir: dir,
-    limit,
-    wait,
-    stopping: () => stop,
-    reconcile: async () => {
-      const { reconcileDevelopment } = await import("./development/run");
-      await reconcileDevelopment(call);
-    },
-  });
+  if (
+    process.env.CONDUIT_WAKE_ENABLED !== undefined &&
+    !["true", "false"].includes(process.env.CONDUIT_WAKE_ENABLED)
+  )
+    throw Error("CONDUIT_WAKE_ENABLED must be true or false");
+  const wake = process.env.CONDUIT_WAKE_ENABLED === "true";
+  let wakeFailed = false;
+  const { WakeGate, superviseWake } = await import("./wake-supervisor");
+  const gate = new WakeGate();
+  const { startWakeTransport, readWakeConfig } =
+    await import("./wake-transport");
+  if (wake) await (await import("./runner")).recoverJournals(dir);
+  const transport = wake
+    ? await startWakeTransport(
+        await readWakeConfig(),
+        () => gate.hint(),
+        () => {
+          wakeFailed = true;
+          stop = true;
+        },
+      )
+    : undefined;
+  try {
+    await (wake ? superviseWake : supervise)({
+      gate,
+      call,
+      stateDir: dir,
+      limit,
+      wait,
+      stopping: () => stop,
+      reconcile: async () => {
+        const { reconcileDevelopment } = await import("./development/run");
+        await reconcileDevelopment(call);
+      },
+    });
+    if (wakeFailed)
+      throw Error(
+        "Wake authorization or session recovery failed; worker stopped",
+      );
+  } finally {
+    transport?.close();
+  }
 } finally {
   await rm(join(dir, "lock"), { force: true });
   log("stopped");

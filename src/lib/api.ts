@@ -1,3 +1,4 @@
+import { wakeApi, flushWake, mayProduceWake } from "./wake-api";
 import { eventApi } from "./event-api";
 import { monitorSnapshot } from "./monitor-api";
 import { initiativeApi } from "./initiative-api";
@@ -101,6 +102,11 @@ async function body(req: Request, max = 32768) {
   }
 }
 export async function handle(req: Request, db: DB): Promise<Response> {
+  const result = await handleRequest(req, db);
+  if (result.ok && mayProduceWake(req)) await flushWake(db);
+  return result;
+}
+async function handleRequest(req: Request, db: DB): Promise<Response> {
   try {
     const authorization = req.headers.get("authorization") ?? "";
     const url = new URL(req.url);
@@ -130,6 +136,8 @@ export async function handle(req: Request, db: DB): Promise<Response> {
     }
     if (method === "GET" && path === "/api/agent/manifest")
       return json(agentManifest());
+    const wake = await wakeApi(req, db, key, body);
+    if (wake) return wake;
     const events = await eventApi(req, db, key, body);
     if (events) return events;
     const initiative = await initiativeApi(req, db, key, body);
@@ -196,7 +204,14 @@ export async function handle(req: Request, db: DB): Promise<Response> {
       ${workerAvailableSql} AS available,
       EXISTS(SELECT 1 FROM orchestrator.jobs j WHERE j.worker_id=w.worker_id AND status='running'
         AND lease_expires_at>clock_timestamp()) AS busy FROM orchestrator.workers w ORDER BY worker_id`);
-      return json({ workers: rows });
+      return json({
+        workers: rows.map((w) => ({
+          ...w,
+          observation_status: w.available ? "recent" : "unknown",
+          observation_as_of: w.last_seen_at,
+          wake_subscription_status: "unobserved",
+        })),
+      });
     }
     if (
       method === "POST" &&

@@ -109,13 +109,14 @@ export async function cycle(
   stopping: () => boolean = () => false,
   journalPath?: string | null,
   onJournal?: (path: string) => void,
+  idleHeartbeat = true,
 ) {
   if (stopping()) return false;
   let path =
     journalPath === undefined
       ? (await recoverJournals(stateDir))[0]
       : (journalPath ?? undefined);
-  await call("/api/heartbeat", {});
+  if (idleHeartbeat) await call("/api/heartbeat", {});
   let journal: Journal;
   if (path) {
     journal = await readJournal(path);
