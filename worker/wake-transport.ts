@@ -210,6 +210,18 @@ export async function startWakeTransport(
           lastReply = Date.now();
           if (m.topic === "realtime:" + c.topic && !joined) {
             if (m.payload?.status !== "ok") {
+              // A cold hosted Realtime service can report this before its
+              // message partitions exist. Only this known readiness failure
+              // uses bounded reconnect; auth and unknown denials stay fatal.
+              const reason = m.payload?.response?.reason;
+              if (
+                m.payload?.status === "error" &&
+                typeof reason === "string" &&
+                reason.startsWith("MissingPartition: ")
+              ) {
+                ws?.close();
+                return;
+              }
               stopped = true;
               fatal();
               ws?.close();
